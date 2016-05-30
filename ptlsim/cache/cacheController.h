@@ -201,6 +201,8 @@ class CacheController : public Controller
 				W64 tag=-1);
 
 		void do_prefetch(MemoryRequest *request, int additional_delay=0);
+        void do_prefetch(MemoryRequest *request, int distance, int additional_delay=0);
+
 
 	public:
 		CacheController(W8 coreid, const char *name,

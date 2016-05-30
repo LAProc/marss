@@ -13,6 +13,8 @@
 
 
 #define LATENCY
+#define PREF_ON
+
 
 #if defined _LATENCY || defined _PREF_ON || defined UOP
 #define CALIB_VERSION

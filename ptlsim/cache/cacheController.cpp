@@ -750,10 +750,10 @@ bool CacheController::cache_access_cb(void *arg)
 							kernel_req);
 				}
 
-				if(!queueEntry->prefetch && type == MEMORY_OP_READ)        
-                    do_prefetch(queueEntry->request, 0);
-
-
+		   if(!queueEntry->prefetch && type == MEMORY_OP_READ)        
+                if(type_==L2_CACHE && !kernel_req)
+                    for(int i =0; i<16; i++)
+                        do_prefetch(queueEntry->request, i, 0);
 			}
             /* else its update and its a cache miss, so ignore that */
 			else {
@@ -977,6 +977,42 @@ bool CacheController::send_update_message(CacheQueueEntry *queueEntry,
 			0, (void*)new_entry);
 
 	return true;
+}
+
+
+void CacheController::do_prefetch(MemoryRequest *request, int distance, int additional_delay)
+{    
+
+	if(!prefetchEnabled_)
+		return;
+
+	if(pendingRequests_.count() > pendingRequests_.size() * 0.85)
+		return;
+
+	MemoryRequest *new_request = memoryHierarchy_->get_free_request(
+            request->get_coreid());
+	assert(new_request);
+
+	new_request->init(request);
+
+	/* Now generate a new address for the prefetch */
+	W64 next_line_address = get_line_address(request);
+	next_line_address = (next_line_address + 1 + distance) << cacheLineBits_;
+	new_request->set_physical_address(next_line_address);
+
+	CacheQueueEntry *new_entry = pendingRequests_.alloc();
+	assert(new_entry);
+
+	new_entry->request = new_request;
+	new_entry->sender = NULL;
+	new_entry->sendTo = lowerInterconnect_;
+	new_entry->prefetch = true;
+	new_entry->annuled = false;
+	new_request->incRefCounter();
+	ADD_HISTORY_ADD(new_request);
+
+	marss_add_event(&cacheAccess_, prefetchDelay_+additional_delay,
+		   new_entry);
 }
 
 
