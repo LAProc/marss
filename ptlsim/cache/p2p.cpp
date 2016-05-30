@@ -102,6 +102,9 @@ bool P2PInterconnect::controller_request_cb(void *arg)
 	message.hasData = msg->hasData;
 	message.arg = msg->arg;
 
+    //if (msg->request->get_coreid() == 1)
+    //    printf("interconnect singal name: %s\n", receiver->get_interconnect_signal()
+    //            ->get_name());
 	bool ret_val;
 	ret_val = receiver->get_interconnect_signal()->emit((void *)&message);
 
@@ -111,6 +114,14 @@ bool P2PInterconnect::controller_request_cb(void *arg)
 	return ret_val;
 
 }
+
+
+void P2PInterconnect::hit_patch_count(Controller * controller, MemoryRequest *request){
+	
+  Controller *receiver = get_other_controller(controller);
+	return receiver->hit_patch_count(this, request);
+
+};
 
 /**
  * @brief Provides interface to fast access another controller
@@ -170,6 +181,15 @@ void P2PInterconnect::dump_configuration(YAML::Emitter &out) const
 
 	out << YAML::EndMap;
 }
+
+void P2PInterconnect::dump_mcpat_configuration(root_system *mcpatData, W32 idx)
+{
+}
+
+void P2PInterconnect::dump_mcpat_stats(root_system *mcpatData, W32 idx)
+{
+}
+
 
 /**
  * @brief P2P Interconnect Builder to export P2P interconnect to machine

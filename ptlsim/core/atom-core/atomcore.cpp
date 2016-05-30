@@ -14,6 +14,7 @@
 #include <branchpred.h>
 #include <decode.h>
 #include <memoryHierarchy.h>
+#include <accelerator.h>
 
 //#define DISABLE_LDST_FWD
 
@@ -713,6 +714,8 @@ W8 AtomOp::execute_uop(W8 idx)
     } else if(uop.opcode == OP_ast) {
         issue_result = execute_ast(uop);
 
+    /*} else if (uop.opcode == OP_gemm) { // LAP micro code execute
+        issue_result = execute_gemm(uop, idx);*/
     } else {
 
         if(isbranch(uop.opcode)) {
@@ -725,7 +728,7 @@ W8 AtomOp::execute_uop(W8 idx)
     }
 
     /* If issue failed then return immediately */
-    if(issue_result == ISSUE_FAIL || issue_result == ISSUE_CACHE_MISS) {
+    if(issue_result == ISSUE_FAIL || issue_result == ISSUE_CACHE_MISS || issue_result == ISSUE_GEMM_BLOCKED) {
         return issue_result;
     }
 
@@ -852,6 +855,55 @@ W8 AtomOp::execute_ast(TransOp& uop)
     ATOMOPLOG2("Flags after ast: ", hexstring(new_flags, 16));
 
     return ISSUE_OK;
+}
+
+W64 AtomOp::get_gemm_addr(TransOp& uop, int idx)
+{
+    // TODO Use physical address
+    W64 virtaddr = radata;
+    return virtaddr;
+}
+
+/**
+ * @brief Execute one gemm uop
+ *
+ * @param uop TransOp to execute
+ *
+ * @return Issue status
+ */
+W8 AtomOp::execute_gemm(TransOp& uop, int idx)
+{
+    AcceleratorArg arg;
+    arg.rip = rip;
+    arg.uuid = uuid;
+
+    //W64 some_addr = generate_address(uop, idx);
+    arg.virt_addr = get_gemm_addr(uop,idx);
+    arg.phys_addr = get_phys_address(uop, false, arg.virt_addr);
+    W64 some_addr = generate_address(uop, idx);
+    //arg.phys_addr = generate_address(uop, idx);
+    //arg.virt_addr = cache_virtaddr;
+
+    printf("Inside execute gemm: generate_address = %llu, virt addr = %llu, phys addr = %llu\n",
+            some_addr, arg.virt_addr, arg.phys_addr);
+
+    if (thread->gemm_ready) {
+        // Call the accelerator (LAP)
+        thread->core.machine.accelerators[0]->ctx = &thread->ctx;
+        thread->core.machine.accelerators[0]->core_wakeup_signal = &thread->gemm_signal;
+        thread->core.machine.accelerators[0]->exec(arg);
+
+        // Poll
+        printf("Start to execute gemm ... \n");
+        thread->gemm_ready = false;
+        return ISSUE_GEMM_BLOCKED;
+
+    } else {
+        // Polling finished
+        printf("Finish to execute gemm ... \n");
+        thread->gemm_ready = true;
+        return ISSUE_OK;
+    }
 }
 
 /**
@@ -1737,6 +1789,12 @@ AtomThread::AtomThread(AtomCore& core, W8 threadid, Context& ctx)
     icache_signal.connect(signal_mem_ptr(*this,
             &AtomThread::icache_wakeup));
 
+    sig_name.reset();
+    sig_name << "Core" << core.get_coreid() << "-Th" << threadid << "-gemm-wakeup";
+    gemm_signal.set_name(sig_name);
+    gemm_signal.connect(signal_mem_ptr(*this,
+            &AtomThread::gemm_wakeup));
+
     op_lists.reset();
     op_free_list("free", op_lists);
     op_fetch_list("fetch", op_lists);
@@ -1762,6 +1820,16 @@ AtomThread::AtomThread(AtomCore& core, W8 threadid, Context& ctx)
 
     st_commit.uipc.add_elem(&st_commit.uops);
     st_commit.uipc.add_elem(&st_cycles);
+
+//    cycles_user = cycles_kernel = 0;
+    total_user = total_kernel = stores = loads = branches = issuefp = issueint = 0;
+    fp_user = fp_kernel = int_user = int_kernel = 0;
+    itbhits_user = itbhits_kernel = itbmisses_user = itbmisses_kernel = 0;
+    dtbmisses_user = dtbmisses_kernel = dtbhits_user = dtbhits_kernel = 0;
+    misspreds_user = misspreds_kernel = pred_user = pred_kernel = contexts = 0;
+    for (int i = 0; i < OPCLASS_COUNT; i++) {
+        issue_user[i] = issue_kernel[i] = 0;
+    }
 
 	st_dcache.miss_ratio.add_elem(&st_dcache.misses);
 	st_dcache.miss_ratio.add_elem(&st_dcache.accesses);
@@ -1812,6 +1880,7 @@ void AtomThread::reset()
     pause_counter = 0;
     running = 0;
     ready = 1;
+    gemm_ready = 1;
 
     op_free_list.reset();
     op_fetch_list.reset();
@@ -1966,7 +2035,9 @@ bool AtomThread::fetch_from_icache()
         st_icache.accesses++;
 
         hit |= config.perfect_cache;
+        //    printf("L1 I-Cache Hit!\n");
         if unlikely (!hit) {
+        //    printf("L1 I-Cache Miss!\n");
             waiting_for_icache_miss = 1;
             icache_miss_addr = req_icache_block;
             st_icache.misses++;
@@ -2097,7 +2168,9 @@ itlb_walk_finish:
     icache_miss_addr = floor(pteaddr, ICACHE_FETCH_GRANULARITY);
     waiting_for_icache_miss = 1;
 
+    //printf("ITLB walk before access icache.\n");
     bool L1_hit = core.memoryHierarchy->access_cache(request);
+    //printf("ITLB walk after access icache, hit=%d.\n", L1_hit);
 
     if(L1_hit) {
         itlb_walk_level--;
@@ -2270,7 +2343,7 @@ bool AtomThread::issue()
         if(dispatchq.empty()) {
             break;
         }
-        
+
         if(!commitbuf.remaining()) {
             break;
         }
@@ -2286,6 +2359,9 @@ bool AtomThread::issue()
         if(issue_result == ISSUE_FAIL) {
             break;
         } else if(issue_result == ISSUE_CACHE_MISS) {
+            ready = false;
+            break;
+        } else if(issue_result == ISSUE_GEMM_BLOCKED) {
             ready = false;
             break;
         } else {
@@ -2388,6 +2464,15 @@ bool AtomThread::access_dcache(Waddr addr, W64 rip, W8 type, W64 uuid)
     }
 
     return hit;
+}
+
+bool AtomThread::gemm_wakeup(void *arg)
+{
+    // Are there any other work to be done here?
+    printf("Gemm Execution finished. Waking up...\n");
+    ready = true;
+
+    return true;
 }
 
 /**
@@ -2679,6 +2764,15 @@ bool AtomThread::commit_queue()
 
         if(buf.op->eom || commit_result == COMMIT_BARRIER) {
             total_insns_committed++;
+	    if (get_default_stats() == user_stats) {
+		total_user_insns_committed++;
+	    }
+	    if (buf.op->is_fp)
+		st_commit.fp_insns++;
+	    else if (!buf.op->is_branch && !buf.op->is_sse &&
+		     !buf.op->is_ast && !buf.op->is_ldst &&
+		     !buf.op->is_barrier && !buf.op->pad)
+		st_commit.int_insns++;
             st_commit.insns++;
             break;
         }
@@ -3007,6 +3101,7 @@ AtomCore::AtomCore(BaseMachine& machine, int num_threads, const char* name)
         threads[i] = thread;
     }
 
+    cycles = 0;
     reset();
 }
 
@@ -3346,6 +3441,9 @@ void AtomCore::check_ctx_changes()
             ATOMCORELOG("Thread flush old_eip: ",
                     HEXADDR(threads[i]->ctx.old_eip), " new-eip: ",
                     HEXADDR(threads[i]->ctx.eip));
+            if (threads[i]->ctx.eip == 0x816f7ac4)
+                printf("flush pipeline for old_eip = %x, new_eip = %x\n",
+                        threads[i]->ctx.old_eip, threads[i]->ctx.eip);
             threads[i]->flush_pipeline();
         }
     }
@@ -3410,11 +3508,276 @@ void AtomCore::dump_configuration(YAML::Emitter &out) const
 	out << YAML::EndMap;
 }
 
+void AtomCore::reset_lastcycle_stats()
+{
+	foreach (i, threadcount) {
+                AtomThread *t = threads[i];
+
+	//	t->st_cycles(user_stats) = t->cycles_user;
+	//	t->st_cycles(kernel_stats) = t->cycles_kernel;
+
+                for (int j = 0; j < OPCLASS_COUNT; j++) {
+                        t->st_fetch.opclass(user_stats)[i] = t->issue_user[i];
+                        t->st_fetch.opclass(kernel_stats)[i] = t->issue_kernel[i];
+                }
+		t->st_commit.insns(user_stats) = t->total_user;
+		t->st_commit.insns(kernel_stats) = t->total_kernel;
+		t->st_commit.fp_insns(user_stats) = t->fp_user;
+		t->st_commit.fp_insns(kernel_stats) = t->fp_kernel;
+		t->st_commit.int_insns(user_stats) = t->int_user;
+		t->st_commit.int_insns(kernel_stats) = t->int_kernel;
+		t->st_branch_predictions.predictions(user_stats) = t->pred_user;
+		t->st_branch_predictions.predictions(kernel_stats) = t->pred_kernel;
+		t->st_branch_predictions.fail(user_stats) = t->misspreds_user;
+		t->st_branch_predictions.fail(kernel_stats) = t->misspreds_kernel;
+		t->st_itlb.misses(user_stats) = t->itbmisses_user;
+		t->st_itlb.misses(kernel_stats) = t->itbmisses_kernel;
+		t->st_itlb.hits(user_stats) = t->itbhits_user;
+		t->st_itlb.hits(kernel_stats) = t->itbhits_kernel;
+		t->st_dtlb.misses(user_stats) = t->dtbmisses_user;
+		t->st_dtlb.misses(kernel_stats) = t->dtbmisses_kernel;
+		t->st_dtlb.hits(user_stats) = t->dtbhits_user;
+		t->st_dtlb.hits(kernel_stats) = t->dtbhits_kernel;
+		//t->ctx.switches = t->contexts;
+	}
+}
+
+void AtomCore::dump_mcpat_configuration(system_core *mcpatCore)
+{
+//	alert.open("alert.dat");
+	mcpatCore->number_hardware_threads = threadcount;
+	mcpatCore->opt_local = 0;
+	mcpatCore->x86 = true;
+	mcpatCore->machine_bits = 64;
+	mcpatCore->virtual_address_width = 64;
+	mcpatCore->physical_address_width = 64;
+	mcpatCore->instruction_length = 32;
+	mcpatCore->opcode_width = 16;
+	mcpatCore->machine_type = 1;
+	mcpatCore->fetch_width = ATOM_FETCH_WIDTH;
+	mcpatCore->number_instruction_fetch_ports = 1;
+/* ===>>>	mcpatCore->decode_width =   .... */
+	mcpatCore->decode_width = ATOM_ISSUE_PER_CYCLE;
+	mcpatCore->issue_width = ATOM_ISSUE_PER_CYCLE;
+	mcpatCore->fp_issue_width = ATOM_FPU_FU_COUNT;
+	mcpatCore->peak_issue_width = ATOM_ISSUE_PER_CYCLE;
+	mcpatCore->commit_width = ATOM_ISSUE_PER_CYCLE;
+	mcpatCore->prediction_width = 1;
+	mcpatCore->predictor.prediction_width = 1;
+	mcpatCore->number_of_BTB = threadcount;
+        mcpatCore->predictor.predictor_size = 4096;
+        mcpatCore->predictor.predictor_entries = 1024;
+        mcpatCore->predictor.local_predictor_entries = 1024;
+        mcpatCore->predictor.global_predictor_entries = 4096;
+        mcpatCore->predictor.global_predictor_bits = 2;
+        mcpatCore->predictor.chooser_predictor_entries = 4096;
+        mcpatCore->predictor.chooser_predictor_bits = 2;
+        for (int j=0; j<20; j++) mcpatCore->predictor.local_predictor_size[j]=1;
+        mcpatCore->BTB.BTB_config[0] = 4096;
+        mcpatCore->BTB.BTB_config[1] = 4;
+        mcpatCore->BTB.BTB_config[2] = 4;
+        mcpatCore->BTB.BTB_config[3] = 1;
+        mcpatCore->BTB.BTB_config[4] = 1;
+        mcpatCore->BTB.BTB_config[5] = 3;
+// McPAT code does not seem to look at the below parameter
+//	mcpatCore->number_of_BPT = 0;
+	mcpatCore->pipeline_depth[0] = 7;
+	mcpatCore->pipeline_depth[1] = 7;
+	mcpatCore->pipelines_per_core[0] = 1;
+	mcpatCore->pipelines_per_core[1] = 1;
+	mcpatCore->ALU_per_core = ATOM_ALU_FU_COUNT;
+	mcpatCore->FPU_per_core = ATOM_FPU_FU_COUNT;
+	mcpatCore->instruction_buffer_size = 32;
+/* =====>	mcpatCore->decoded_stream_buffer_size = 16 */
+	mcpatCore->decoded_stream_buffer_size = 16;
+	mcpatCore->instruction_window_scheme = 1;
+	mcpatCore->instruction_window_size = DISPATCH_QUEUE_SIZE;
+	mcpatCore->fp_instruction_window_size = DISPATCH_QUEUE_SIZE;
+	mcpatCore->archi_Regs_IRF_size = TRANSREG_COUNT;  // around 10
+	mcpatCore->archi_Regs_FRF_size = TRANSREG_COUNT;  // around 10
+	mcpatCore->rename_scheme = 0;
+	mcpatCore->register_windows_size = 0;
+	strcpy(mcpatCore->LSU_order, "inorder");
+	mcpatCore->store_buffer_size = ATOM_STORE_BUF_SIZE * threadcount;
+// ======>	mcpatCore->memory_ports = 2;
+	mcpatCore->memory_ports = 2;
+	mcpatCore->RAS_size = 1024;
+	mcpatCore->IFU_duty_cycle = 1;
+	mcpatCore->LSU_duty_cycle = 1;
+	mcpatCore->BR_duty_cycle = 0.5;
+	mcpatCore->ALU_duty_cycle = 1;
+	mcpatCore->MUL_duty_cycle = 0.3;
+	mcpatCore->FPU_duty_cycle = 0.3;
+	mcpatCore->ALU_cdb_duty_cycle = 1;
+	mcpatCore->MUL_cdb_duty_cycle = 0.3;
+	mcpatCore->FPU_cdb_duty_cycle = 0.3;
+	mcpatCore->MemManU_I_duty_cycle = 1;
+	mcpatCore->MemManU_D_duty_cycle = 0.5;
+	mcpatCore->pipeline_duty_cycle = 0.9;
+	mcpatCore->itlb.number_entries = ITLB_SIZE;
+	mcpatCore->dtlb.number_entries = DTLB_SIZE;
+	mcpatCore->BTB.BTB_config[0] = 4096;
+	mcpatCore->BTB.BTB_config[1] = 4;
+	mcpatCore->BTB.BTB_config[2] = 4;
+	mcpatCore->BTB.BTB_config[3] = 1;
+	mcpatCore->BTB.BTB_config[4] = 1;
+	mcpatCore->BTB.BTB_config[5] = 1;
+}
+
+void AtomCore::dump_mcpat_stats(root_system *mcpatData, W32 coreid)
+{
+	system_core *core = &(mcpatData->core[coreid]);
+	core->total_cycles = sim_cycle - cycles;
+	mcpatData->total_cycles = core->total_cycles;
+	cycles = sim_cycle;
+
+	W64 total_insns = 0;
+        W64 stats_user, stats_kernel;
+        core->total_instructions = 0;
+        core->int_instructions = 0;
+        core->fp_instructions = 0;
+        core->load_instructions = 0;
+        core->store_instructions = 0;
+        core->branch_instructions = 0;
+        core->committed_instructions = 0;
+        core->committed_int_instructions = 0;
+        core->committed_fp_instructions = 0;
+        core->ROB_reads = 0;
+        core->ROB_writes = 0;
+        core->int_regfile_reads = 0;
+        core->int_regfile_writes = 0;
+        core->float_regfile_reads = 0;
+        core->float_regfile_writes = 0;
+        core->rename_reads = 0;
+        core->rename_writes = 0;
+        core->fp_rename_reads = 0;
+        core->fp_rename_writes = 0;
+        core->branch_mispredictions = 0;
+	core->ialu_accesses = 0;
+	core->fpu_accesses = 0;
+	core->mul_accesses = 0;
+        core->context_switches = 0;
+        core->itlb.total_hits = 0;
+        core->itlb.total_misses = 0;
+        core->itlb.conflicts = 0;
+        core->itlb.total_accesses = 0;
+        core->dtlb.total_accesses = 0;
+        core->dtlb.total_misses = 0;
+        core->dtlb.conflicts = 0;
+
+	foreach (i, threadcount) {
+		AtomThread *t = threads[i];
+		for (W32 i = 0; i < OPCLASS_COUNT; i++) {
+			t->issue_user[i] = t->st_fetch.opclass(user_stats)[i];
+                        t->issue_kernel[i] = t->st_fetch.opclass(kernel_stats)[i];
+			total_insns += t->issue_user[i] + t->issue_kernel[i];
+		}
+	
+		stats_user = t->st_fetch.opclass(user_stats)[11] + t->st_fetch.opclass(user_stats)[13];
+		stats_kernel = t->st_fetch.opclass(kernel_stats)[11] + t->st_fetch.opclass(kernel_stats)[13];
+		core->load_instructions += (stats_user + stats_kernel) - (t->loads);
+		t->loads = (stats_user + stats_kernel);
+		W64 ld = (stats_user + stats_kernel);
+
+		stats_user = t->st_fetch.opclass(user_stats)[12];
+		stats_kernel = t->st_fetch.opclass(kernel_stats)[12];
+		core->store_instructions += (stats_user + stats_kernel) - t->stores;
+		t->stores = (stats_user + stats_kernel);
+		W64 st = (stats_user + stats_kernel);
+
+		stats_user = t->st_fetch.opclass(user_stats)[6] + t->st_fetch.opclass(user_stats)[7] + 
+				t->st_fetch.opclass(user_stats)[8];
+		stats_kernel = t->st_fetch.opclass(kernel_stats)[6] + t->st_fetch.opclass(kernel_stats)[7] + 
+				t->st_fetch.opclass(kernel_stats)[8];
+		core->branch_instructions += (stats_user + stats_kernel) - t->branches;
+		t->branches = (stats_user + stats_kernel);
+		W64 br = (stats_user + stats_kernel);
+
+		W64 fp = 0, hits = 0;
+		stats_user = stats_kernel = 0;
+		for (W32 i = 20; i <= 26; i++) {
+			stats_user += t->st_fetch.opclass(user_stats)[i] - 0;
+			stats_kernel += t->st_fetch.opclass(kernel_stats)[i] - 0;
+		}
+		core->fp_instructions += (stats_user + stats_kernel) - t->issuefp;
+		t->issuefp = (stats_user + stats_kernel);
+		fp = (stats_user + stats_kernel);
+
+		core->int_instructions += total_insns - (ld + br + fp + st) - t->issueint;
+		t->issueint = total_insns - (ld + br + fp + st);
+
+		stats_user = t->st_commit.insns(user_stats) - 0;
+		stats_kernel = t->st_commit.insns(kernel_stats) - 0;
+		core->committed_instructions += (stats_user + stats_kernel) - (t->total_user + t->total_kernel);
+		t->total_user = stats_user;
+		t->total_kernel = stats_kernel;
+		core->total_instructions += core->committed_instructions;
+
+		stats_user = t->st_commit.fp_insns(user_stats) - 0;
+                stats_kernel = t->st_commit.fp_insns(kernel_stats) - 0;
+                core->committed_fp_instructions += (stats_user + stats_kernel) - (t->fp_user + t->fp_kernel);
+                t->fp_user = stats_user;
+                t->fp_kernel = stats_kernel;
+
+		stats_user = t->st_commit.int_insns(user_stats) - 0;
+                stats_kernel = t->st_commit.int_insns(kernel_stats) - 0;
+                core->committed_int_instructions += (stats_user + stats_kernel) - (t->int_user + t->int_kernel);
+                t->int_user = stats_user;
+                t->int_kernel = stats_kernel;
+
+		core->fpu_accesses += core->committed_fp_instructions;
+                core->ialu_accesses += core->committed_int_instructions;
+                core->cdb_alu_accesses = core->ialu_accesses;
+                core->cdb_fpu_accesses = core->fpu_accesses;
+                core->cdb_mul_accesses = core->mul_accesses;
+
+                stats_user = t->st_branch_predictions.predictions(user_stats) - 0;
+                stats_kernel = t->st_branch_predictions.predictions(kernel_stats) - 0;
+		core->predictor.predictor_accesses = (stats_user + stats_kernel) - (t->pred_user + t->pred_kernel);
+                t->pred_user = stats_user;
+                t->pred_kernel = stats_kernel;
+
+                stats_user = t->st_branch_predictions.fail(user_stats) - 0;
+                stats_kernel = t->st_branch_predictions.fail(kernel_stats) - 0;
+                core->branch_mispredictions += (stats_user + stats_kernel) - (t->misspreds_user + t->misspreds_kernel);
+                t->misspreds_user = stats_user;
+                t->misspreds_kernel = stats_kernel;
+
+                stats_user = t->st_itlb.misses(user_stats) - 0;
+                stats_kernel = t->st_itlb.misses(kernel_stats) - 0;
+                core->itlb.total_misses += (stats_user + stats_kernel) - (t->itbmisses_user + t->itbmisses_kernel);
+                t->itbmisses_user = stats_user;
+                t->itbmisses_kernel = stats_kernel;
+                stats_user = t->st_itlb.hits(user_stats) - 0;
+                stats_kernel = t->st_itlb.hits(kernel_stats) - 0;
+                core->itlb.total_hits += (stats_user + stats_kernel) - (t->itbhits_user + t->itbhits_kernel);
+                t->itbhits_user = stats_user;
+                t->itbhits_kernel = stats_kernel;
+                core->itlb.total_accesses += (core->itlb.total_hits + core->itlb.total_misses);
+                core->itlb.conflicts += core->itlb.total_misses;
+
+                stats_user = t->st_dtlb.misses(user_stats) - 0;
+                stats_kernel = t->st_dtlb.misses(kernel_stats) - 0;
+                core->dtlb.total_misses += (stats_user + stats_kernel) - (t->dtbmisses_user + t->dtbmisses_kernel);
+                t->dtbmisses_user = stats_user;
+                t->dtbmisses_kernel = stats_kernel;
+                stats_user = t->st_dtlb.hits(user_stats);
+                stats_kernel = t->st_dtlb.hits(kernel_stats);
+                hits += (stats_user + stats_kernel) - (t->dtbhits_user - t->dtbhits_kernel);
+                t->dtbhits_user = stats_user;
+                t->dtbhits_user = stats_kernel;
+                core->dtlb.total_accesses += (core->dtlb.total_misses + hits);
+                core->dtlb.conflicts += core->dtlb.total_misses;
+
+                //core->context_switches += t->ctx.switches - t->contexts;
+                //t->contexts = t->ctx.switches;
+	}
+}
+
 AtomCoreBuilder::AtomCoreBuilder(const char* name)
     : CoreBuilder(name)
 {
 }
-
 BaseCore* AtomCoreBuilder::get_new_core(BaseMachine& machine, const char* name)
 {
     AtomCore* core = new AtomCore(machine, 1, name);

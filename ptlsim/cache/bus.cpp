@@ -91,6 +91,11 @@ int BusInterconnect::access_fast_path(Controller *controller,
 	return -1;
 }
 
+void BusInterconnect::hit_patch_count(Controller * controller, MemoryRequest *request)
+{
+
+}
+
 void BusInterconnect::annul_request(MemoryRequest *request)
 {
 	foreach(i, controllers.count()) {
@@ -289,6 +294,14 @@ void BusInterconnect::dump_configuration(YAML::Emitter &out) const
 				controllers[0]->queue.size());
 
 	out << YAML::EndMap;
+}
+
+void BusInterconnect::dump_mcpat_configuration(root_system *mcpatData, W32 idx)
+{
+}
+
+void BusInterconnect::dump_mcpat_stats(root_system *mcpatData, W32 idx)
+{
 }
 
 struct BusBuilder : public InterconnectBuilder

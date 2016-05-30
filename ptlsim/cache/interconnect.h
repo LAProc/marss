@@ -29,6 +29,7 @@
 #define INTERCONNECT_H
 
 #include <controller.h>
+#include <mcpat.h>
 
 namespace Memory {
 
@@ -65,13 +66,20 @@ class Interconnect
 
 		virtual bool controller_request_cb(void *arg)=0;
 		virtual void register_controller(Controller *controller)=0;
-		virtual int access_fast_path(Controller *controller,
+		
+    //MOCH Patch 
+    virtual void hit_patch_count(Controller * controller, MemoryRequest *request)=0;
+    virtual int access_fast_path(Controller *controller,
 				MemoryRequest *request)=0;
 		virtual void print_map(ostream& os)=0;
 		virtual void print(ostream& os) const = 0;
 		virtual int get_delay()=0;
 		virtual void annul_request(MemoryRequest* request) = 0;
+		virtual void reset_lastcycle_stats() = 0;
 		virtual void dump_configuration(YAML::Emitter &out) const = 0;
+		virtual void dump_mcpat_configuration(root_system *mcpatData, W32 idx) = 0;
+		virtual void dump_mcpat_stats(root_system *mcpatData, W32 idx) = 0;
+		virtual bool is_empty() const = 0;
 
 		Signal* get_controller_request_signal() {
 			return &controller_request_;

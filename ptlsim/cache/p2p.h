@@ -29,6 +29,7 @@
 #define P2P_INTERCONNECT_H
 
 #include <interconnect.h>
+#include <mcpat.h>
 
 namespace Memory {
 
@@ -70,6 +71,7 @@ class P2PInterconnect : public Interconnect
 		P2PInterconnect(const char *name, MemoryHierarchy *memoryHierarchy);
 		bool controller_request_cb(void *arg);
 		void register_controller(Controller *controller);
+    void hit_patch_count(Controller * controller, MemoryRequest *request);
 		int access_fast_path(Controller *controller,
 				MemoryRequest *request);
 		void print_map(ostream& os);
@@ -93,7 +95,14 @@ class P2PInterconnect : public Interconnect
 		void annul_request(MemoryRequest *request) {
 		}
 
+		void reset_lastcycle_stats() {}
 		void dump_configuration(YAML::Emitter &out) const;
+		void dump_mcpat_configuration(root_system *mcpatData, W32 idx);
+		void dump_mcpat_stats(root_system *mcpatData, W32 idx);
+
+		bool is_empty() const {
+			return true;
+		}
 };
 
 static inline ostream& operator << (ostream& os, const P2PInterconnect&

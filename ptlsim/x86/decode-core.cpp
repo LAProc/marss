@@ -1208,7 +1208,7 @@ int TraceDecoder::bias_by_segreg(int basereg) {
     return basereg;
 }
 
-void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias, bool rmw, W8 sizeshift) {
+void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias, bool rmw, W8 sizeshift, bool is_sse_temp) {
     //
     // In the address generation form used by internally generated
     // uops, we need the full virtual address, including the segment base
@@ -1223,6 +1223,12 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     force_seg_bias |= memop;
 
     int imm_bits = (memop) ? 32 : 64;
+
+    bool is_sse = is_sse_temp;
+
+    //std::cout<<"is_sse in generate "<<is_sse<<std::endl;
+
+
 
 	if (memref.type != OPTYPE_MEM) DECODE_EXCEPTION();
 
@@ -1275,6 +1281,8 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
             ldst.cachelevel = cachelevel;
             ldst.locked = locked;
             ldst.extshift = 0;
+            //MOCH
+            ldst.sse_load = is_sse;
             this << ldst;
         } else {
             assert(opcode == OP_add);
@@ -1284,7 +1292,12 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
         // [ra + imm32] or [ra]
         if (force_seg_bias) basereg = bias_by_segreg(basereg);
         if (imm_is_not_encodable) {
-            this << TransOp(OP_add, REG_temp8, basereg, REG_imm, REG_zero, 3, offset);
+            
+            //MOCH
+            TransOp temp(OP_add, REG_temp8, basereg, REG_imm, REG_zero, 3, offset);
+            temp.sse_load=is_sse;
+
+            this << temp;
             basereg = REG_temp8;
             offset = 0;
         }
@@ -1296,6 +1309,8 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
             ldst.locked = locked;
             ldst.extshift = 0; // rmw;
         }
+        //MOCH
+        ldst.sse_load=is_sse; 
         this << ldst;
     } else if (offset == 0) {
         // [ra + rb*scale] or [rb*scale]
@@ -1319,6 +1334,9 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
             ldst.locked = locked;
             ldst.extshift = 0; // rmw;
         }
+        
+        //MOCH
+        ldst.sse_load=is_sse;
         this << ldst;
     } else {
         // [ra + imm32 + rb*scale]
@@ -1340,12 +1358,19 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
             ldst.locked = locked;
             ldst.extshift = 0; // rmw;
         }
+
+        //MOCH
+        ldst.sse_load=is_sse;
         this << ldst;
     }
 }
 
-void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool rmw) {
-    address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel, false, rmw);
+void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool rmw, bool is_sse_temp) {
+  
+    //bool is_sse = true;
+
+    //std::cout<<"is_sse in operand load is "<<is_sse<<std::endl; 
+    address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel, false, rmw, 3, is_sse_temp);
 }
 
 void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype, bool rmw) {

@@ -52,6 +52,8 @@ static const int NUMBER_OF_CORES_PER_L2 = 1;
 
 #endif
 
+#define TSX_MAX_NESTING 10
+
 // #define SINGLE_CORE_MEM_CONFIG
 // Enable/Disable L3 cache
 //#define ENABLE_L3_ACHE
@@ -245,6 +247,8 @@ static inline bool fits_in_signed_32bit(W64s v) { return fits_in_signed_nbit(v, 
 #define assignbit(x, i, v) ((x) = (((x) &= (W64)(~(1LL << (i)))) | (((W64)((bool)(v))) << i)));
 
 #define foreach(i, n) for (int i = 0; i < (n); i++)
+#define foreachij(i, n1, n2) for (int i = (n1); i < (n2); i++)
+
 
 static inline W64s signext64(W64s x, const int i) { return (x << (64-i)) >> (64-i); }
 static inline W32s signext32(W32s x, const int i) { return (x << (32-i)) >> (32-i); }

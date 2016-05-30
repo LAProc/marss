@@ -814,6 +814,7 @@ struct Context: public CPUX86State {
   W64 insns_at_last_mode_switch;
   W64 user_instructions_commited;
   W64 kernel_instructions_commited;
+  W64 switches;
   W64 exception;
   W64 reg_trace;
   W64 reg_selfrip;
@@ -830,7 +831,6 @@ struct Context: public CPUX86State {
   W64 page_fault_addr;
   W64 exec_fault_addr;
   map<Waddr, Waddr> hvirt_gphys_map;
-
 
   void change_runstate(int new_state) { running = new_state; }
 
@@ -987,7 +987,7 @@ struct Context: public CPUX86State {
 
   void init();
 
-  Context() : invalid_reg(-1), reg_zero(0), reg_ctx((Waddr)this) { }
+  Context() : switches(0), invalid_reg(-1), reg_zero(0), reg_ctx((Waddr)this) { }
 
   W64 virt_to_pte_phys_addr(Waddr virtaddr, byte& level);
 
@@ -1157,6 +1157,27 @@ struct Context: public CPUX86State {
       }
       use32 = (use64) ? false : (hflags >> HF_CS32_SHIFT) & 1;
 	  virt_addr_mask = (use64 ? 0xffffffffffffffffULL : 0x00000000ffffffffULL);
+  }
+
+  Context* tsx_backup_ctx;
+  int tsx_mode;  /* Indicate if CPU is in TSX mode and its recursive depth */
+  W64 tsx_abort_addr;
+
+  void tsx_backup()
+  {
+      /* Store Context to its backup context */
+      memcpy(tsx_backup_ctx, this, sizeof(Context));
+  }
+
+  void tsx_restore()
+  {
+      /* Restore Context from backup */
+      memcpy(this, tsx_backup_ctx, sizeof(Context));
+  }
+
+  void tsx_clear_backup()
+  {
+      bzero(tsx_backup_ctx, sizeof(Context));
   }
 
 };
@@ -1402,7 +1423,13 @@ enum {
   OP_vpack_ss,
   // Special Opcodes
   OP_ast,
-  OP_MAX_OPCODE,
+  // LAP Opcode
+  OP_gemm,
+
+
+  // END of Opcode Enum
+  OP_MAX_OPCODE
+
 };
 
 // Limit for shls, shrs, sars rb immediate:
@@ -1571,9 +1598,10 @@ struct TransOpBase {
   W64s rcimm;
   W64 riptaken;
   W64 ripseq;
+  bool sse_load;
 };
 
-struct TransOp: public TransOpBase {
+/*struct TransOp: public TransOpBase {
   TransOp() { }
 
   TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0) {
@@ -1592,7 +1620,36 @@ struct TransOp: public TransOpBase {
     this->rcimm = rcimm;
     this->setflags = setflags;
   }
+};*/
+
+
+struct TransOp: public TransOpBase {
+  TransOp() { }
+
+  TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0, bool is_sse=false) {
+    init(opcode, rd, ra, rb, rc, size, rbimm, rcimm, setflags, memid, is_sse);
+  }
+  //MOCH
+  /*TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0, bool load_sse) {
+    init(opcode, rd, ra, rb, rc, size, rbimm, rcimm, setflags, memid);
+    sse_load = load_sse;
+  }*/
+
+  void init(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0, bool is_sse=false)  {
+    setzero(*this);
+    this->opcode = opcode;
+    this->rd = rd;
+    this->ra = ra;
+    this->rb = rb;
+    this->rc = rc;
+    this->size = size;
+    this->rbimm = rbimm;
+    this->rcimm = rcimm;
+    this->setflags = setflags;
+    this->sse_load = is_sse;
+  }
 };
+
 
 enum { LDST_ALIGN_NORMAL, LDST_ALIGN_LO, LDST_ALIGN_HI };
 

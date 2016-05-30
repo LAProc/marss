@@ -76,6 +76,8 @@ namespace Memory {
         public:
             virtual void init()=0;
             virtual W64 tagOf(W64 address)=0;
+            //MOCH
+            virtual W64 setOf(W64 address)=0;
             virtual int latency() const =0;
             virtual CacheLine* probe(MemoryRequest *request)=0;
             virtual CacheLine* insert(MemoryRequest *request,
@@ -85,10 +87,13 @@ namespace Memory {
             virtual void print(ostream& os) const =0;
             virtual int get_line_bits() const=0;
             virtual int get_access_latency() const=0;
-			virtual int get_size() const=0;
-			virtual int get_set_count() const=0;
-			virtual int get_way_count() const=0;
-			virtual int get_line_size() const=0;
+			      virtual int get_size() const=0;
+			      virtual int get_set_count() const=0;
+			      virtual int get_way_count() const=0;
+			      virtual int get_line_size() const=0;
+            virtual void reset_lines_states(W8 value)=0;
+            virtual bool check_lines_states_tsx(W8 value1, W8 value2)=0;
+
     };
 
     template <int SET_COUNT, int WAY_COUNT, int LINE_SIZE, int LATENCY>
@@ -113,13 +118,15 @@ namespace Memory {
             CacheLines(int readPorts, int writePorts);
             void init();
             W64 tagOf(W64 address);
+            W64 setOf(W64 address);
             int latency() const { return LATENCY; };
             CacheLine* probe(MemoryRequest *request);
             CacheLine* insert(MemoryRequest *request, W64& oldTag);
             int invalidate(MemoryRequest *request);
             bool get_port(MemoryRequest *request);
             void print(ostream& os) const;
-
+            void reset_lines_states(W8 value);
+            bool check_lines_states_tsx(W8 value1, W8 value2);
 			/**
 			 * @brief Get Cache Size
 			 *
@@ -210,6 +217,12 @@ namespace Memory {
             return floor(address, LINE_SIZE);
         }
 
+    template <int SET_COUNT, int WAY_COUNT, int LINE_SIZE, int LATENCY>
+        W64 CacheLines<SET_COUNT, WAY_COUNT, LINE_SIZE, LATENCY>::setOf(W64 address)
+        {
+            //return floor(address, LINE_SIZE);
+            return base_t::setof(address);
+        }
 
     // Return true if valid line is found, else return false
     template <int SET_COUNT, int WAY_COUNT, int LINE_SIZE, int LATENCY>
@@ -260,7 +273,7 @@ namespace Memory {
                 default:
                     memdebug("Unknown type of memory request: " <<
                             request->get_type() << endl);
-                    assert(0);
+                   // assert(0);
             };
             return rc;
         }
@@ -275,7 +288,28 @@ namespace Memory {
                 }
             }
         }
-
+   template <int SET_COUNT, int WAY_COUNT, int LINE_SIZE, int LATENCY>
+        void CacheLines<SET_COUNT, WAY_COUNT, LINE_SIZE, LATENCY>::reset_lines_states(W8 value)
+        {
+            foreach(i, SET_COUNT) {
+                Set &set = base_t::sets[i];
+                foreach(j, WAY_COUNT) {
+                   set.data[j].state = set.data[j].state & ~value;;
+                }
+            }
+        }
+   template <int SET_COUNT, int WAY_COUNT, int LINE_SIZE, int LATENCY>
+       bool CacheLines<SET_COUNT, WAY_COUNT, LINE_SIZE, LATENCY>::check_lines_states_tsx(W8 value1, W8 value2)
+       {
+           foreach(i, SET_COUNT) {
+               Set &set = base_t::sets[i];
+               foreach(j, WAY_COUNT) {
+                   if ((set.data[j].state & value1)  && !(set.data[j].state & value2))
+                        return false;
+               }
+           }
+           return true;
+       }
 };
 
 #endif // CACHE_LINES_H

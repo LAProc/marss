@@ -948,6 +948,10 @@ bool TraceDecoder::decode_fast() {
 
     static const byte x86_prefetch_to_pt2x_cachelevel[8] = {2, 1, 2, 3};
     int level = x86_prefetch_to_pt2x_cachelevel[modrm.reg];
+
+    //MOCH
+    //std::cout << "prefetch level is " << level << std::endl;
+
     prefixes &= ~PFX_LOCK;
     operand_load(REG_temp0, ra, OP_ld_pre, DATATYPE_INT, level);
     break;

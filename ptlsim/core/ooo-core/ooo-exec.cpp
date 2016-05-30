@@ -493,9 +493,20 @@ int ReorderBufferEntry::issue() {
 
     thread.thread_stats.issue.uops++;
 
+
     fu = lsbindex(executable_on_fu);
     clearbit(core.fu_avail, fu);
     core.robs_on_fu[fu] = this;
+
+    /* Update mcpat counters */
+
+    W16 mask = (W16) - 1;
+    if (fu >= 0 && fu <= 3) {
+        thread.thread_stats.issue.result.ialu_accesses++;
+    }
+    else if (fu >= 4 && fu <= 7)
+        thread.thread_stats.issue.result.fpu_accesses++;
+
     cycles_left = fuinfo[uop.opcode].latency;
     changestate(thread.rob_issued_list[cluster]);
 
@@ -579,7 +590,8 @@ int ReorderBufferEntry::issue() {
                 return 0;
             }
         } else if unlikely (uop.opcode == OP_ld_pre) {
-            issueprefetch(state, radata, rbdata, rcdata, uop.cachelevel);
+            //issueprefetch(state, radata, rbdata, rcdata, uop.cachelevel);
+            issueprefetch(state, origvirt, radata, rbdata, rcdata, uop.cachelevel);
         } else if unlikely (uop.opcode == OP_ast) {
             issueast(state, uop.riptaken, radata, rbdata, rcdata, ra.flags, rb.flags, rc.flags);
         } else {
@@ -1756,8 +1768,26 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     Memory::MemoryRequest *request = core.memoryHierarchy->get_free_request(core.get_coreid());
     assert(request != NULL);
 
+#if 1
+    //MOCH
+    if (uop.sse_load){
+    //if (true){
+        //if(logable(1))
+            //ptl_logfile << "detect load sse : "<< uop.opcode <<endl;
+      request->init_sse(core.get_coreid(), threadid, state.physaddr << 3, idx, sim_cycle,
+            false, uop.rip.rip, uop.uuid, Memory::MEMORY_OP_READ, true);
+    }
+    
+    else{ 
+            //ptl_logfile << "crap !!! "<<endl;
     request->init(core.get_coreid(), threadid, state.physaddr << 3, idx, sim_cycle,
             false, uop.rip.rip, uop.uuid, Memory::MEMORY_OP_READ);
+    }
+#endif
+
+    //request->init(core.get_coreid(), threadid, state.physaddr << 3, idx, sim_cycle,
+    //        false, uop.rip.rip, uop.uuid, Memory::MEMORY_OP_READ);
+   
     request->set_coreSignal(&core.dcache_signal);
 
     bool L1hit = core.memoryHierarchy->access_cache(request);
@@ -1774,8 +1804,17 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
         physreg->changestate(PHYSREG_WAITING);
     }
 
+    //MOCH
+    //if (uop.sse_load)   thread.thread_stats.dcache.load.issue.sse_load++;
+    
     return ISSUE_COMPLETED;
 }
+
+
+bool OooCore::prefetch_wakeup(void *arg) {
+  return 0;
+}
+
 
 /**
  * @brief Issue a 'light-weight' assist function that is exected in pipeline
@@ -1797,6 +1836,7 @@ void ReorderBufferEntry::issueast(IssueState& state, W64 assistid, W64 ra,
     /* If the Assist is Pause then pause the thread for Fix cycles */
     if(assistid == L_ASSIST_PAUSE) {
         getthread().pause_counter = THREAD_PAUSE_CYCLES;
+        getthread().thread_stats.cycles_in_pause += THREAD_PAUSE_CYCLES;
         getthread().thread_stats.cycles_in_pause += THREAD_PAUSE_CYCLES;
     }
 
@@ -2068,6 +2108,7 @@ rob_cont:
 
     lsq->physaddr = pteaddr >> 3;
 
+    //cout << "ROB tlb walk " << sim_cycle << endl;
     bool L1_hit = core.memoryHierarchy->access_cache(request);
 
     if(L1_hit) {
@@ -2181,13 +2222,19 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
  * @param rc
  * @param cachelevel
  */
-void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel) {
+
+void ReorderBufferEntry::issueprefetch(IssueState& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, int cachelevel) {
+    
+
+    ThreadContext& thread = getthread();
+    OooCore& core = getcore();
+  
     state.reg.rddata = 0;
     state.reg.rdflags = 0;
 
     int exception = 0;
     Waddr addr;
-    Waddr origaddr;
+    //Waddr origaddr;
     PTEUpdate pteupdate;
     PageFaultErrorCode pfec;
     bool annul;
@@ -2195,14 +2242,60 @@ void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc
     LoadStoreQueueEntry dummy;
     setzero(dummy);
     dummy.virtaddr = origaddr;
-    addrgen(dummy, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+    Waddr physaddr = addrgen(dummy, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
+    //physaddr = physaddr << 3;
+
+   // std::cout<< "pref addr is " <<physaddr<< std::endl;
+    //MOCH
+    thread.thread_stats.dcache.load.issue.total_pref++;
     /* Ignore bogus prefetches: */
     if unlikely (exception) return;
 
     /* Ignore unaligned prefetches (should never happen) */
     if unlikely (annul) return;
+   
+
+#if 0
+    bool cache_available = core.memoryHierarchy->is_cache_available(core.get_coreid(), threadid, false/* icache */);
+    if(!cache_available){
+        msdebug << " dcache can not read core:", core.get_coreid(), " threadid ", threadid, endl;
+        //replay();
+        //thread.thread_stats.dcache.load.issue.replay.dcache_stall++;
+        //load_store_second_phase = 1;
+        //return ISSUE_NEEDS_REPLAY;
+        return;
+    }
+
+
+    Memory::MemoryRequest *request = core.memoryHierarchy->get_free_request(core.get_coreid());
+    assert(request != NULL);
+    
+    request->init(core.get_coreid(), threadid, (physaddr-1000), idx, sim_cycle,
+            false, uop.rip.rip, uop.uuid, Memory::MEMORY_OP_READ);
+
+
+    //request->init_pref(core.get_coreid(), threadid, (physaddr-1000), idx, sim_cycle,
+    //          false, uop.rip.rip, uop.uuid, Memory::MEMORY_OP_READ, true, cachelevel);
+
+    request->set_coreSignal(&core.pref_signal);
+
+    //MOCH
+    //bool L1hit = core.memoryHierarchy->access_cache(request);
+
+    //cycles_left = 0;
+    //changestate(thread.rob_cache_miss_list); /* TODO: change to cache access waiting list */
+  
+    //Do we need this ? or would this cause a deadlock
+    //physreg->changestate(PHYSREG_WAITING);
+#endif
+
+    //MOCH
+    thread.thread_stats.dcache.load.issue.good_pref++;
+
+    return;
 }
+
 
 /**
  * @brief D-Cache responded with requested data
@@ -2550,11 +2643,18 @@ void ReorderBufferEntry::release() {
  */
 int OooCore::issue(int cluster) {
 
+    int sse_issuecount=0;
+    int non_sse_issuecount=0;
+    
     int issuecount = 0;
+    int stats = 0;
     int maxwidth = clusters[cluster].issue_width;
 
+    //ptl_logfile << "Maxwidth is " << maxwidth << endl;
+
+    
     int last_issue_id = -1;
-    while (issuecount < maxwidth) {
+    while (true) {
         int iqslot;
         issueq_operation_on_cluster_with_result(getcore(), cluster, iqslot, issue(last_issue_id));
 
@@ -2569,10 +2669,16 @@ int OooCore::issue(int cluster) {
         assert(inrange(idx, 0, ROB_SIZE-1));
         ReorderBufferEntry& rob = thread->ROB[idx];
 
-		if unlikely (opclassof(rob.uop.opcode) == OPCLASS_FP)
-			core_stats.iq_fp_reads++;
-		else
-			core_stats.iq_reads++;
+
+        if unlikely (opclassof(rob.uop.opcode) == OPCLASS_FP) {
+            core_stats.iq_fp_reads++;
+                stats++;
+        } 
+        else {
+            core_stats.iq_reads++;
+            stats++;
+        }
+
 
         rob.iqslot = iqslot;
         int rc = rob.issue();
@@ -2583,12 +2689,26 @@ int OooCore::issue(int cluster) {
             default:
                 break;
         }
-        if(rc != ISSUE_SKIPPED)
+        if(rc != ISSUE_SKIPPED) {
+            //MOCH
             issuecount++;
+                
+	    }
+
+        if(issuecount>=maxwidth)
+            break;
+
     }
+
+
 
     per_cluster_stats_update(issue.width,
             cluster, [min(issuecount, MAX_ISSUE_WIDTH)]++);
+
+    CORE_STATS(issue.width.sse_width)[min(sse_issuecount, MAX_ISSUE_WIDTH)]++; 
+    CORE_STATS(issue.width.non_sse_width)[min(non_sse_issuecount, MAX_ISSUE_WIDTH)]++;
+
+
 
     return issuecount;
 }

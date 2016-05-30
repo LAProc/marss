@@ -36,6 +36,9 @@
 #define logable(level) (0)
 #endif
 
+#include <mcpat.h>
+extern void print_mcpat_stats(root_system *mcpatData);
+
 using namespace OOO_CORE_MODEL;
 using namespace superstl;
 
@@ -113,6 +116,7 @@ static void init_luts() {
 ThreadContext::ThreadContext(OooCore& core_, W8 threadid_, Context& ctx_)
     : core(core_), threadid(threadid_), ctx(ctx_)
       , thread_stats("thread", &core_)
+//, thread_stats_reset("thread", &core_)
 {
     stringbuf stats_name;
     stats_name << "thread" << threadid;
@@ -131,8 +135,33 @@ ThreadContext::ThreadContext(OooCore& core_, W8 threadid_, Context& ctx_)
     thread_stats.commit.ipc.add_elem(&thread_stats.commit.insns);
     thread_stats.commit.ipc.add_elem(&core_.core_stats.cycles);
     /* thread_stats.commit.ipc.enable_periodic_dump(); */
+    thread_stats.commit.insns.enable_periodic_dump();
+    thread_stats.branchpred.summary.enable_periodic_dump();
+    thread_stats.dcache.itlb.misses.enable_periodic_dump();
+    thread_stats.dcache.dtlb.misses.enable_periodic_dump();
 
     thread_stats.set_default_stats(user_stats);
+    //thread_stats_reset = thread_stats;
+
+       total_user = total_kernel = total_integer = total_fp = 0;
+       total_committed_insns = 0;
+       ld_user = ld_kernel = st_user = st_kernel = br_user = br_kernel = 0;
+        robreads_user = robreads_kernel = robwrites_user = robwrites_kernel = 0;
+       rnreads_user = rnreads_kernel = rnwrites_user = rnwrites_kernel = 0;
+       fp_rnreads_user = fp_rnreads_kernel = fp_rnwrites_user = fp_rnwrites_kernel = 0;
+        misspreds_user = misspreds_kernel = 0;
+       fpregreads_user = fpregreads_kernel = fpregwrites_user = fpregwrites_kernel = 0;
+       ialu_user = ialu_kernel = fpu_user = fpu_kernel = mul = 0;
+        contexts_user = contexts_kernel = itbhits_user = itbhits_kernel = 0;
+       itbmisses_user = itbmisses_kernel = dtbhits_user = dtbhits_kernel = 0;
+       dtbmisses_user = dtbmisses_kernel = 0;
+       total_insns = load = store = issue_integer = issuefp = branch = 0;
+    for(int i = 0; i < 2; i++) {
+       idle[i] = 0;
+       predictions[i] = 0;
+       intregreads_user = intregreads_kernel = intregwrites_user = intregwrites_kernel = 0;
+    }
+
     reset();
 }
 
@@ -237,6 +266,17 @@ OooCore::OooCore(BaseMachine& machine_, W8 num_threads,
         threadcount = 1;
     }
 
+    for (W32 i = 0; i < 2; i++) {
+           cycles_user = cycles_kernel = st_insns[i] = iq_reads_kernel = iq_reads_user = iq_writes_user = iq_writes_kernel = 0;
+           iq_fp_reads_user = iq_fp_reads_kernel = iq_fp_writes_user = iq_fp_writes_kernel = 0;
+           core_idle[i] = rob_reads[i] = rob_writes[i] = rename_reads[i] = rename_writes[i] = 0;
+           fp_rename_reads[i] = fp_rename_writes[i] = mispreds[i] = total_instructions[i] = 0;
+           int_reg_reads[i] = int_reg_writes[i] = fp_reg_reads[i] = fp_reg_writes[i] = 0;
+           cntxt[i] = predictor[i] = itb_hits[i] = itb_misses[i] = dtb_accesses[i] = dtb_misses[i] = 0;
+           ld_insns[i] = br_insns[i] = st_insns[i] = fp_insns[i] = int_insns[i] = 0;
+           total_committed_instructions[i] = committed_fp_insns[i] = committed_int_insns[i] = 0;
+    }
+
     setzero(threads);
 
     assert(num_threads > 0 && "Core has atleast 1 thread");
@@ -258,6 +298,13 @@ OooCore::OooCore(BaseMachine& machine_, W8 num_threads,
     dcache_signal.set_name(sig_name.buf);
     dcache_signal.connect(signal_mem_ptr(*this,
                 &OooCore::dcache_wakeup));
+
+    sig_name << core_name << "-pref-wakeup";
+    //MOCH
+    pref_signal.set_name(sig_name.buf);
+    pref_signal.connect(signal_mem_ptr(*this,
+                &OooCore::prefetch_wakeup));
+
 
     sig_name.reset();
 
@@ -645,7 +692,6 @@ bool OooCore::runcycle(void* none) {
             }
             continue;
         }
-
         commitrc[tid] = thread->commit();
         for_each_cluster(j) thread->writeback(j);
         for_each_cluster(j) thread->transfer(j);
@@ -679,7 +725,7 @@ bool OooCore::runcycle(void* none) {
         ptl_logfile << "OooCore::run():issue\n";
     }
 
-    for_each_cluster(i) { issue(i); }
+    for_each_cluster(i) { /*cout << "in runcycle, core: " << int(coreid) << "i: " << i << endl; */issue(i); }
 
     /*
      * Most of the frontend (except fetch!) also works with round robin priority
@@ -1651,6 +1697,432 @@ void OooCore::dump_configuration(YAML::Emitter &out) const
 	out << YAML::EndMap;
 }
 
+void OooCore::reset_lastcycle_stats()
+{
+	core_stats.cycles(user_stats) = cycles_user;
+	core_stats.cycles(kernel_stats) = cycles_kernel;
+	core_stats.iq_reads(user_stats) = iq_reads_user;		
+	core_stats.iq_reads(kernel_stats) = iq_reads_kernel;		
+	core_stats.iq_fp_reads(user_stats) = iq_fp_reads_user;
+	core_stats.iq_fp_reads(kernel_stats) = iq_fp_reads_kernel;
+	core_stats.iq_fp_writes(user_stats) = iq_fp_writes_user;
+	core_stats.iq_fp_writes(kernel_stats) = iq_fp_writes_kernel;
+
+	foreach (i, threadcount) {
+		ThreadContext *t = threads[i];
+
+		t->thread_stats.rob_reads(user_stats) = t->robreads_user;
+		t->thread_stats.rob_reads(kernel_stats) = t->robreads_kernel;
+		t->thread_stats.rob_writes(user_stats) = t->robwrites_user;
+		t->thread_stats.rob_writes(kernel_stats) = t->robwrites_kernel;
+		t->thread_stats.rename_table_reads(user_stats) = t->rnreads_user;
+		t->thread_stats.rename_table_reads(kernel_stats) = t->rnreads_kernel;
+		t->thread_stats.rename_table_writes(user_stats) = t->rnwrites_user;
+		t->thread_stats.rename_table_writes(kernel_stats) = t->rnwrites_kernel;
+		t->thread_stats.rename_table_fp_reads(user_stats) = t->fp_rnreads_user;
+		t->thread_stats.rename_table_fp_reads(kernel_stats) = t->fp_rnreads_kernel;
+		t->thread_stats.rename_table_fp_writes(user_stats) = t->fp_rnwrites_user;
+		t->thread_stats.rename_table_fp_writes(kernel_stats) = t->fp_rnwrites_kernel;
+
+		for (int j = 0; j < OPCLASS_COUNT; j++) {
+			t->thread_stats.issue.opclass(user_stats)[i] = t->issue_user[i];
+			t->thread_stats.issue.opclass(kernel_stats)[i] = t->issue_kernel[i];
+			t->thread_stats.commit.opclass(user_stats)[i] = t->commit_user[i];
+			t->thread_stats.commit.opclass(kernel_stats)[i] = t->commit_kernel[i];
+		}
+
+		t->thread_stats.reg_reads(user_stats) = t->intregreads_user;
+		t->thread_stats.reg_reads(kernel_stats) = t->intregreads_kernel;
+		t->thread_stats.reg_writes(user_stats) = t->intregwrites_user;
+		t->thread_stats.reg_writes(kernel_stats) = t->intregwrites_kernel;
+		t->thread_stats.fp_reg_reads(user_stats) = t->fpregreads_user;
+		t->thread_stats.fp_reg_reads(kernel_stats) = t->fpregreads_kernel;
+		t->thread_stats.fp_reg_writes(user_stats) = t->fpregwrites_user;
+		t->thread_stats.fp_reg_writes(kernel_stats) = t->fpregwrites_kernel;
+		t->thread_stats.issue.result.ialu_accesses(user_stats) = t->ialu_user;
+		t->thread_stats.issue.result.ialu_accesses(kernel_stats) = t->ialu_kernel;
+		t->thread_stats.issue.result.fpu_accesses(user_stats) = t->fpu_user;
+		t->thread_stats.issue.result.fpu_accesses(kernel_stats) = t->fpu_kernel;
+		t->thread_stats.ctx_switches(user_stats) = t->contexts_user;
+		t->thread_stats.ctx_switches(kernel_stats) = t->contexts_kernel;
+		t->thread_stats.dcache.itlb.hits(user_stats) = t->itbhits_user;
+		t->thread_stats.dcache.itlb.hits(kernel_stats) = t->itbhits_kernel;
+		t->thread_stats.dcache.itlb.misses(user_stats) = t->itbmisses_user;
+		t->thread_stats.dcache.itlb.misses(kernel_stats) = t->itbmisses_kernel;
+		t->thread_stats.dcache.dtlb.hits(user_stats) = t->dtbhits_user;
+		t->thread_stats.dcache.dtlb.hits(kernel_stats) = t->dtbhits_kernel;
+		t->thread_stats.dcache.dtlb.misses(user_stats) = t->dtbmisses_user;
+		t->thread_stats.dcache.dtlb.misses(kernel_stats) = t->dtbmisses_kernel;
+	}
+}
+
+void OooCore::dump_mcpat_configuration(system_core *mcpatCore)
+{
+	mcpatCore->number_hardware_threads = threadcount;
+	mcpatCore->opt_local = 0;
+	mcpatCore->x86 = true;
+	mcpatCore->machine_bits = 64;
+	mcpatCore->virtual_address_width = 64;
+	mcpatCore->physical_address_width = 64;
+	mcpatCore->instruction_length = 32;
+	mcpatCore->opcode_width = 16;
+	mcpatCore->machine_type = 0;
+	mcpatCore->fetch_width = FETCH_QUEUE_SIZE;
+	mcpatCore->number_instruction_fetch_ports = 1;
+	mcpatCore->decode_width = OOO_FRONTEND_WIDTH;
+	mcpatCore->issue_width = MAX_ISSUE_WIDTH;
+	mcpatCore->fp_issue_width = FPU_FU_COUNT;
+	mcpatCore->peak_issue_width = MAX_ISSUE_WIDTH;
+	mcpatCore->commit_width = COMMIT_WIDTH;
+	mcpatCore->number_of_BTB = threadcount;
+	mcpatCore->number_of_BPT = 1;
+	mcpatCore->prediction_width = 1;
+	mcpatCore->predictor.prediction_width = 1;
+	mcpatCore->predictor.predictor_size = UNALIGNED_PREDICTOR_SIZE;
+	mcpatCore->predictor.predictor_entries = 1024;
+	mcpatCore->predictor.local_predictor_entries = 1024;
+	mcpatCore->predictor.global_predictor_entries = UNALIGNED_PREDICTOR_SIZE;
+	mcpatCore->predictor.global_predictor_bits = 2;
+	mcpatCore->predictor.chooser_predictor_entries = UNALIGNED_PREDICTOR_SIZE;
+	mcpatCore->predictor.chooser_predictor_bits = 2;
+	for (int j=0; j<20; j++) mcpatCore->predictor.local_predictor_size[j]=1;
+	mcpatCore->BTB.BTB_config[0] = 4096;
+        mcpatCore->BTB.BTB_config[1] = 4;
+        mcpatCore->BTB.BTB_config[2] = 4;
+        mcpatCore->BTB.BTB_config[3] = 1;
+        mcpatCore->BTB.BTB_config[4] = 1;
+        mcpatCore->BTB.BTB_config[5] = 3;
+
+	mcpatCore->pipeline_depth[0] = 7;
+	mcpatCore->pipeline_depth[1] = 7;
+	mcpatCore->pipelines_per_core[0] = 1;
+	mcpatCore->pipelines_per_core[1] = 1;
+	mcpatCore->ALU_per_core = ALU_FU_COUNT;
+	mcpatCore->FPU_per_core = FPU_FU_COUNT;
+	mcpatCore->MUL_per_core = FPU_FU_COUNT;
+	mcpatCore->instruction_buffer_size = 32;
+	mcpatCore->decoded_stream_buffer_size = 16;
+	mcpatCore->instruction_window_scheme = 1;
+	mcpatCore->instruction_window_size = 64;
+	mcpatCore->fp_instruction_window_size = 64;
+	mcpatCore->ROB_size = ROB_SIZE;
+	mcpatCore->archi_Regs_IRF_size = 16;
+	mcpatCore->archi_Regs_FRF_size = 32;
+	mcpatCore->phy_Regs_IRF_size = PHYS_REG_FILE_SIZE;
+	mcpatCore->phy_Regs_FRF_size = PHYS_REG_FILE_SIZE;
+	mcpatCore->rename_scheme = 0;
+	mcpatCore->register_windows_size = 0;
+	strcpy(mcpatCore->LSU_order, "inorder");
+	mcpatCore->store_buffer_size = STQ_SIZE * threadcount;
+	mcpatCore->load_buffer_size = LDQ_SIZE * threadcount;
+	mcpatCore->memory_ports = 2;
+	mcpatCore->RAS_size = 64;
+	mcpatCore->IFU_duty_cycle = 1;
+	mcpatCore->LSU_duty_cycle = 0.5;
+	mcpatCore->BR_duty_cycle = 0.5;
+	mcpatCore->ALU_duty_cycle = 1;
+	mcpatCore->MUL_duty_cycle = 0.3;
+	mcpatCore->FPU_duty_cycle = 0.3;
+	mcpatCore->ALU_cdb_duty_cycle = 1;
+	mcpatCore->MUL_cdb_duty_cycle = 0.3;
+	mcpatCore->FPU_cdb_duty_cycle = 0.3;
+	mcpatCore->MemManU_I_duty_cycle = 1;
+	mcpatCore->MemManU_D_duty_cycle = 0.5;
+	mcpatCore->pipeline_duty_cycle = 0.9;
+	mcpatCore->itlb.number_entries = ITLB_SIZE;
+	mcpatCore->dtlb.number_entries = DTLB_SIZE;
+}
+
+void OooCore::dump_mcpat_stats(root_system *mcpatData, W32 coreid)
+{
+	system_core *core = &(mcpatData->core[coreid]);
+	core->total_cycles = (core_stats.cycles(user_stats) + core_stats.cycles(kernel_stats)) - (cycles_user + cycles_kernel);
+	mcpatData->total_cycles = core->total_cycles;
+	cycles_user = core_stats.cycles(user_stats);
+	cycles_kernel = core_stats.cycles(kernel_stats);
+
+	/* Core-level stats */
+	OooCore& this_core = getcore();
+	W64 stats_user = this_core.core_stats.iq_writes(user_stats);
+	W64 stats_kernel = this_core.core_stats.iq_writes(kernel_stats);
+	core->inst_window_writes = (stats_user + stats_kernel) - (iq_writes_user + iq_writes_kernel);
+	iq_writes_user = stats_user;
+	iq_writes_kernel = stats_kernel;
+
+	stats_user = this_core.core_stats.iq_reads(user_stats);
+	stats_kernel = this_core.core_stats.iq_reads(kernel_stats);
+	core->inst_window_reads = (stats_user + stats_kernel) - (iq_reads_user + iq_reads_kernel);
+	iq_reads_user = stats_user;
+	iq_reads_kernel = stats_kernel;
+
+	core->inst_window_wakeup_accesses = (core->inst_window_reads + core->inst_window_writes);
+
+	stats_user = this_core.core_stats.iq_fp_reads(user_stats);
+	stats_kernel = this_core.core_stats.iq_fp_reads(kernel_stats);
+	core->fp_inst_window_reads = (stats_user + stats_kernel) - (iq_fp_reads_user + iq_fp_reads_kernel);
+	iq_fp_reads_user = stats_user;
+	iq_fp_reads_kernel = stats_kernel;
+
+	stats_user = this_core.core_stats.iq_fp_writes(user_stats);
+	stats_kernel = this_core.core_stats.iq_fp_writes(kernel_stats);
+	core->fp_inst_window_writes = (stats_user + stats_kernel) - (iq_fp_writes_user + iq_fp_writes_kernel);
+	iq_fp_writes_user = stats_user;
+	iq_fp_writes_kernel = stats_kernel;
+
+	core->total_instructions = 0;
+	core->int_instructions = 0;
+	core->fp_instructions = 0;
+	core->load_instructions = 0;
+	core->store_instructions = 0;
+	core->branch_instructions = 0;
+	core->committed_instructions = 0;
+	core->committed_int_instructions = 0;
+	core->committed_fp_instructions = 0;
+	core->ROB_reads = 0;
+	core->ROB_writes = 0;
+	core->int_regfile_reads = 0;
+	core->int_regfile_writes = 0;
+	core->float_regfile_reads = 0;
+	core->float_regfile_writes = 0;
+	core->rename_reads = 0;
+	core->rename_writes = 0;
+	core->fp_rename_reads = 0;
+	core->fp_rename_writes = 0;
+	core->branch_mispredictions = 0;
+        core->ialu_accesses = 0;
+        core->fpu_accesses = 0;
+	core->context_switches = 0;
+	core->itlb.total_hits = 0;
+	core->itlb.total_misses = 0;
+	core->itlb.conflicts = 0;
+	core->itlb.total_accesses = 0;
+	core->dtlb.total_accesses = 0;
+	core->dtlb.total_misses = 0;
+	core->dtlb.conflicts = 0;
+	W64 hits = 0;
+	
+	foreach (i, threadcount) {
+		W64 st = 0, ld = 0, br = 0, fp = 0;
+		W64 total_insns = 0;
+		ThreadContext *t = threads[i];
+
+		if (!t->thread_stats.get_default_stats())
+			continue;
+		for (W32 j = 0; j < OPCLASS_COUNT; j++) {
+			t->issue_user[j] = t->thread_stats.issue.opclass(user_stats)[j];
+			t->issue_kernel[j] = t->thread_stats.issue.opclass(kernel_stats)[j];
+			total_insns += t->issue_user[j] + t->issue_kernel[j];
+		}
+
+		stats_user = t->thread_stats.issue.opclass(user_stats)[12];
+		stats_kernel = t->thread_stats.issue.opclass(kernel_stats)[12];
+		core->store_instructions += (stats_user + stats_kernel) - (t->store);
+		t->store = stats_user + stats_kernel;
+		st = stats_user + stats_kernel;
+
+		stats_user = t->thread_stats.issue.opclass(user_stats)[11] + t->thread_stats.issue.opclass(user_stats)[13];
+		stats_kernel = t->thread_stats.issue.opclass(kernel_stats)[11] + t->thread_stats.issue.opclass(kernel_stats)[13];
+		core->load_instructions += (stats_user + stats_kernel) - (t->load);
+		t->load = stats_user + stats_kernel;
+		ld = stats_user + stats_kernel;
+
+		stats_user = t->thread_stats.issue.opclass(user_stats)[6] + t->thread_stats.issue.opclass(user_stats)[7] +
+				t->thread_stats.issue.opclass(user_stats)[8];
+		stats_kernel = t->thread_stats.issue.opclass(kernel_stats)[6] + t->thread_stats.issue.opclass(kernel_stats)[7] +
+				t->thread_stats.issue.opclass(kernel_stats)[8];
+		core->branch_instructions += (stats_user + stats_kernel) - (t->branch);
+		t->branch = stats_user + stats_kernel;
+		br = stats_user + stats_kernel;
+
+		stats_user = stats_kernel = 0;
+		for (W32 j = 20; j <= 26; j++) {
+			stats_user += t->thread_stats.issue.opclass(user_stats)[j];
+			stats_kernel += t->thread_stats.issue.opclass(kernel_stats)[j];
+		}
+		core->fp_instructions += (stats_user + stats_kernel) - (t->issuefp);
+		t->issuefp = stats_user + stats_kernel;
+		fp = stats_user + stats_kernel;
+
+		core->int_instructions += (total_insns - ld - st - br - fp) - t->issue_integer;
+		t->issue_integer = (total_insns - ld - st - br - fp);
+//--------------------------------------------
+		/* committed instruction */
+		total_insns = 0;
+		for (W32 j = 0; j < OPCLASS_COUNT; j++) {
+			t->commit_user[j] = t->thread_stats.commit.opclass(user_stats)[j];
+			t->commit_kernel[j] = t->thread_stats.commit.opclass(kernel_stats)[j];
+			total_insns += t->commit_user[j] + t->commit_kernel[j];
+		}
+
+		stats_user = t->thread_stats.commit.opclass(user_stats)[12];
+		stats_kernel = t->thread_stats.commit.opclass(kernel_stats)[12];
+		st = (stats_user + stats_kernel);
+
+		stats_user = t->thread_stats.commit.opclass(user_stats)[11] + t->thread_stats.commit.opclass(user_stats)[13];
+		stats_kernel = t->thread_stats.commit.opclass(kernel_stats)[11] + t->thread_stats.commit.opclass(kernel_stats)[13];
+		ld = stats_user + stats_kernel;
+
+		stats_user = t->thread_stats.commit.opclass(user_stats)[6] + t->thread_stats.commit.opclass(user_stats)[7] +
+				t->thread_stats.commit.opclass(user_stats)[8];
+		stats_kernel = t->thread_stats.commit.opclass(kernel_stats)[6] + 
+			t->thread_stats.commit.opclass(kernel_stats)[7] + t->thread_stats.commit.opclass(kernel_stats)[8];
+		br = stats_user + stats_kernel;
+
+		stats_user = stats_kernel = 0;
+		for (W32 j = 20; j <= 26; j++) {
+			stats_user += t->thread_stats.commit.opclass(user_stats)[j];
+			stats_kernel += t->thread_stats.commit.opclass(kernel_stats)[j];
+		}
+		core->committed_fp_instructions += (stats_user + stats_kernel) - (t->total_fp);
+		t->total_fp = stats_user + stats_kernel;
+		fp = stats_user + stats_kernel;
+
+		core->committed_int_instructions += (total_insns - ld - st - br - fp) - t->total_integer;
+		t->total_integer = (total_insns - ld - st - br - fp);
+		core->committed_instructions += total_insns - t->total_committed_insns;
+		t->total_committed_insns = total_insns;
+		core->total_instructions += core->committed_instructions;
+
+		stats_user = t->thread_stats.rob_reads(user_stats) - 0;	
+		stats_kernel = t->thread_stats.rob_reads(kernel_stats) - 0;
+		core->ROB_reads += (stats_user + stats_kernel) - (t->robreads_user + t->robreads_kernel);
+		t->robreads_user = stats_user;
+		t->robreads_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.rob_writes(user_stats) - 0;	
+		stats_kernel = t->thread_stats.rob_writes(kernel_stats) - 0;
+		core->ROB_writes += (stats_user + stats_kernel) - (t->robwrites_user + t->robwrites_kernel);
+		t->robwrites_user = stats_user;
+		t->robwrites_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.rename_table_reads(user_stats);
+		stats_kernel = t->thread_stats.rename_table_reads(kernel_stats);
+		core->rename_reads += (stats_user + stats_kernel) - (t->rnreads_user + t->rnreads_kernel);
+		t->rnreads_user = stats_user;
+		t->rnreads_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.rename_table_writes(user_stats);
+		stats_kernel = t->thread_stats.rename_table_writes(kernel_stats);
+		core->rename_writes += (stats_user + stats_kernel) - (t->rnwrites_user + t->rnwrites_kernel);
+		t->rnwrites_user = stats_user;
+		t->rnwrites_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.rename_table_fp_reads(user_stats);
+		stats_kernel = t->thread_stats.rename_table_fp_reads(kernel_stats);
+		core->fp_rename_reads += (stats_user + stats_kernel) - (t->fp_rnreads_user + t->fp_rnreads_kernel);
+		t->fp_rnreads_user = stats_user;
+		t->fp_rnreads_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.rename_table_fp_writes(user_stats);
+		stats_kernel = t->thread_stats.rename_table_fp_writes(kernel_stats);
+		core->fp_rename_writes += (stats_user + stats_kernel) - (t->fp_rnwrites_user + t->fp_rnwrites_kernel);
+		t->fp_rnwrites_user = stats_user;
+		t->fp_rnwrites_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.branchpred.summary(user_stats)[MISPRED] - 0;
+		stats_kernel = t->thread_stats.branchpred.summary(kernel_stats)[MISPRED] - 0;
+		core->branch_mispredictions += (stats_user + stats_kernel) - (t->misspreds_user + t->misspreds_kernel);
+		t->misspreds_user = stats_user;
+		t->misspreds_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.reg_reads(user_stats) - 0;
+		stats_kernel = t->thread_stats.reg_reads(kernel_stats) - 0;
+		core->int_regfile_reads += (stats_user + stats_kernel) - (t->intregreads_user + t->intregreads_kernel);
+		t->intregreads_user = stats_user;
+		t->intregreads_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.reg_writes(user_stats) - 0;
+		stats_kernel = t->thread_stats.reg_writes(kernel_stats) - 0;
+		core->int_regfile_writes += (stats_user + stats_kernel) - (t->intregwrites_user + t->intregwrites_kernel);
+		t->intregwrites_user = stats_user;
+		t->intregwrites_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.fp_reg_reads(user_stats) - 0;
+		stats_kernel = t->thread_stats.fp_reg_reads(kernel_stats) - 0;
+		core->float_regfile_reads += (stats_user + stats_kernel) - (t->fpregreads_user + t->fpregreads_kernel);
+		t->fpregreads_user = stats_user;
+		t->fpregreads_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.fp_reg_writes(user_stats) - 0;
+		stats_kernel = t->thread_stats.fp_reg_writes(kernel_stats) - 0;
+		core->float_regfile_writes += (stats_user + stats_kernel) - (t->fpregwrites_user + t->fpregwrites_kernel);
+		t->fpregwrites_user = stats_user;
+		t->fpregwrites_kernel = stats_kernel;
+	
+		core->fpu_accesses += core->committed_fp_instructions;
+		core->ialu_accesses += core->committed_int_instructions;
+
+		W64 mul = t->thread_stats.issue.opclass(kernel_stats)[16] + t->thread_stats.issue.opclass(kernel_stats)[16];
+		core->mul_accesses = mul - t->mul;
+		t->mul = mul;
+
+		core->cdb_alu_accesses = core->ialu_accesses;
+		core->cdb_fpu_accesses = core->fpu_accesses;
+		core->cdb_mul_accesses = core->mul_accesses;
+
+		stats_user = t->thread_stats.ctx_switches(user_stats) - 0;
+		stats_kernel = t->thread_stats.ctx_switches(kernel_stats) - 0;
+		core->context_switches += (stats_user + stats_kernel) - (t->contexts_user + t->contexts_kernel);
+		t->contexts_user = stats_user;
+		t->contexts_kernel = stats_kernel;
+
+		stats_user = t->thread_stats.dcache.itlb.misses(user_stats) - 0;
+		stats_kernel = t->thread_stats.dcache.itlb.misses(kernel_stats) - 0;
+		core->itlb.total_misses += (stats_user + stats_kernel) - (t->itbmisses_user + t->itbmisses_kernel);
+		t->itbmisses_user = stats_user;
+		t->itbmisses_kernel = stats_kernel;
+		stats_user = t->thread_stats.dcache.itlb.hits(user_stats) - 0;
+		stats_kernel = t->thread_stats.dcache.itlb.hits(kernel_stats) - 0;
+		core->itlb.total_hits += (stats_user + stats_kernel) - (t->itbhits_user + t->itbhits_kernel);
+		t->itbhits_user = stats_user;
+		t->itbhits_kernel = stats_kernel;
+		core->itlb.total_accesses += (core->itlb.total_hits + core->itlb.total_misses);
+		core->itlb.conflicts += core->itlb.total_misses;
+
+		stats_user = t->thread_stats.dcache.dtlb.misses(user_stats) - 0;
+		stats_kernel = t->thread_stats.dcache.dtlb.misses(kernel_stats) - 0;
+		core->dtlb.total_misses += (stats_user + stats_kernel) - (t->dtbmisses_user + t->dtbmisses_kernel);
+		t->dtbmisses_user = stats_user;
+		t->dtbmisses_kernel = stats_kernel;
+		stats_user = t->thread_stats.dcache.dtlb.hits(user_stats);
+		stats_kernel = t->thread_stats.dcache.dtlb.hits(kernel_stats);
+		hits += (stats_user + stats_kernel) - (t->dtbhits_user - t->dtbhits_kernel);
+		t->dtbhits_user = stats_user;
+		t->dtbhits_user = stats_kernel;
+		core->dtlb.total_accesses += (core->dtlb.total_misses + hits);
+		core->dtlb.conflicts += core->dtlb.total_misses;
+	}
+	if (core->committed_instructions < (core->committed_int_instructions + core->committed_fp_instructions)) {
+		print_mcpat_stats(mcpatData);	
+		assert(core->committed_instructions >= (core->committed_int_instructions + core->committed_fp_instructions));
+	}
+	assert(core->committed_instructions >= 0);
+	assert(core->committed_int_instructions >= 0);
+	assert(core->committed_fp_instructions >= 0);
+	assert(core->ROB_reads >= 0);
+	assert(core->ROB_writes >= 0);
+	assert(core->int_regfile_reads >= 0);
+	assert(core->int_regfile_writes >= 0);
+	assert(core->float_regfile_reads >= 0);
+	assert(core->float_regfile_writes >= 0);
+	assert(core->rename_reads >= 0);
+	assert(core->rename_writes >= 0);
+	assert(core->fp_rename_reads >= 0);
+	assert(core->fp_rename_writes >= 0);
+	assert(core->branch_mispredictions >= 0);
+	assert(core->context_switches >= 0);
+	assert(core->itlb.total_hits >= 0);
+	assert(core->itlb.total_misses >= 0);
+	assert(core->itlb.conflicts >= 0);
+	assert(core->itlb.total_accesses >= 0);
+	assert(core->dtlb.total_accesses >= 0);
+	
+	core->idle_cycles = 0;
+	core->busy_cycles = (core->total_cycles - core->idle_cycles);
+
+	core->function_calls = 0;
+}
+	
 OooCoreBuilder::OooCoreBuilder(const char* name)
     : CoreBuilder(name)
 {

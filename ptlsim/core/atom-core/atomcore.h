@@ -20,6 +20,8 @@
 
 #include <atomcore-const.h>
 
+#include <mcpat.h>
+
 /* Logging Macros */
 // Base Logging Level
 #define ATOM_BASE_LL 5
@@ -137,13 +139,14 @@ namespace ATOM_CORE_MODEL {
         ISSUE_OK_BLOCK,     // Issue completed, dont' allow second issue
         ISSUE_FAIL,         // Issue failed
         ISSUE_CACHE_MISS,   // Issue had cache miss
+        ISSUE_GEMM_BLOCKED,   // Issue had been blocked due to a GEMM operation
         ISSUE_OK_SKIP,      // Issue complted but skip any other
                             // issue in this cycle
         NUM_ISSUE_RETULTS
     };
 
     static const char* issue_res_names[NUM_ISSUE_RETULTS] = {
-        "ok", "block", "fail", "cache-miss", "skip",
+        "ok", "block", "fail", "cache-miss", "gemm-block", "skip",
     };
 
     enum {
@@ -188,6 +191,8 @@ namespace ATOM_CORE_MODEL {
 #define FPU3 (FU_FPU3 * ((FPU_FU_COUNT - 4) >= 0))
 #define A ALULAT // ALU latency, assuming fast bypass
 #define L LOADLAT
+// TODO Provide an exact latency
+#define GEMMLAT ALULAT
 
 #define ANYALU ALU0|ALU1|ALU2|ALU3
 #define ANYLDU AGU0|AGU1|AGU2|AGU3
@@ -377,6 +382,7 @@ namespace ATOM_CORE_MODEL {
         {OP_vpack_ss,       2, P1, 1, ANYFPU},
         // Special Opcodes
         {OP_ast,			4, P0, 0, ANYINT},
+        //{OP_gemm,			GEMMLAT, P0, 0, ANYFU},
     };
 
 #undef A
@@ -522,6 +528,9 @@ namespace ATOM_CORE_MODEL {
         W64  get_virt_address(TransOp& uop, bool is_st);
         W64  get_phys_address(TransOp& uop, bool is_st, W64 virtaddr);
         void dtlb_walk_completed();
+
+        W8   execute_gemm(TransOp& uop, int idx);
+        W64  get_gemm_addr(TransOp& uop, int idx);
 
         // Forward
         void forward();
@@ -752,6 +761,7 @@ namespace ATOM_CORE_MODEL {
 
         bool dcache_wakeup(void *arg);
         bool icache_wakeup(void *arg);
+        bool gemm_wakeup(void *arg);
 
         StoreBufferEntry* get_storebuf_entry();
 
@@ -837,6 +847,7 @@ namespace ATOM_CORE_MODEL {
         AtomOp* exception_op;
         bool    running;
         bool    ready;
+        bool    gemm_ready;
 
         W8  queued_mem_lock_count;
         W64 queued_mem_lock_list[4];
@@ -866,6 +877,7 @@ namespace ATOM_CORE_MODEL {
          */
         Signal dcache_signal;
         Signal icache_signal;
+        Signal gemm_signal;
 
         /* Stats Collection */
         struct st_fetch : public Statable
@@ -948,6 +960,8 @@ namespace ATOM_CORE_MODEL {
             StatObj<W64> insns;
             StatObj<W64> atomops;
             StatObj<W64> uops;
+	    StatObj<W64> int_insns;
+	    StatObj<W64> fp_insns;
 
             StatEquation<W64, double, StatObjFormulaDiv> ipc;
             StatEquation<W64, double, StatObjFormulaDiv> atomop_pc;
@@ -958,6 +972,8 @@ namespace ATOM_CORE_MODEL {
                   , insns("insns", this)
                   , atomops("atomops", this)
                   , uops("uops", this)
+                  , int_insns("int_insns", this)
+                  , fp_insns("fp_insns", this)
                   , ipc("ipc", this)
                   , atomop_pc("atomop_pc", this)
                   , uipc("uipc", this)
@@ -1020,6 +1036,12 @@ namespace ATOM_CORE_MODEL {
 
         StatArray<W64, ASSIST_COUNT> assists;
         StatArray<W64, L_ASSIST_COUNT> lassists;
+//    W64 cycles_user, cycles_kernel;
+        W64 total_user, total_kernel, stores, loads, branches, issuefp, issueint;
+        W64 int_user, int_kernel, fp_user, fp_kernel, issue_user[OPCLASS_COUNT], issue_kernel[OPCLASS_COUNT];
+        W64 itbhits_user, itbhits_kernel, itbmisses_user, itbmisses_kernel;
+        W64 dtbhits_user, dtbhits_kernel, dtbmisses_user, dtbmisses_kernel;
+        W64 contexts, pred_user, pred_kernel, misspreds_user, misspreds_kernel;
     };
 
     static inline ostream& operator <<(ostream& os, const AtomThread& th)
@@ -1048,7 +1070,10 @@ namespace ATOM_CORE_MODEL {
         void update_stats();
         void flush_pipeline();
         //W8   get_coreid();
-		void dump_configuration(YAML::Emitter &out) const;
+	void reset_lastcycle_stats();
+	void dump_configuration(YAML::Emitter &out) const;
+	void dump_mcpat_configuration(system_core *mcpatCore);
+	void dump_mcpat_stats(root_system *mcpatData, W32 core);
 
         // Pipeline related functions
         void fetch();
@@ -1111,6 +1136,8 @@ namespace ATOM_CORE_MODEL {
         // multiple instructions to same FU in one cycle
         W64 fu_available:32, fu_used:32;
         W8  port_available;
+	W64 run_count, skip_count;
+	W64 cycles;
     };
 
     static inline ostream& operator <<(ostream& os, const AtomCore& core)

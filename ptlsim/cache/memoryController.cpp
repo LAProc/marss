@@ -38,7 +38,9 @@
 
 #include <machine.h>
 
+extern uint64_t qemu_ram_size;
 using namespace Memory;
+
 
 MemoryController::MemoryController(W8 coreid, const char *name,
 		MemoryHierarchy *memoryHierarchy) :
@@ -49,6 +51,35 @@ MemoryController::MemoryController(W8 coreid, const char *name,
 
     if(!memoryHierarchy_->get_machine().get_option(name, "latency", latency_)) {
         latency_ = 50;
+    }
+#ifdef DRAMSIM
+
+    mem = DRAMSim::getMemorySystemInstance(config.dramsim_outputfile.buf, config.dramsim_device_ini_file.buf,
+            config.dramsim_system_ini_file.buf, config.dramsim_pwd.buf,
+            config.dramsim_results_dir_name.buf, qemu_ram_size>>20 ); 
+/*
+    mem = DRAMSim::getMemorySystemInstance(config.dramsim_device_ini_file.buf,
+            config.dramsim_system_ini_file.buf, config.dramsim_pwd.buf,
+            config.dramsim_results_dir_name.buf, qemu_ram_size>>20 ); 
+*/
+
+    mem->setCPUClockSpeed(config.core_freq_hz); 
+
+    printf("DRAMSim in MemControl\n");
+
+	typedef DRAMSim::Callback <Memory::MemoryController, void, uint, uint64_t, uint64_t> dramsim_callback_t;
+	DRAMSim::TransactionCompleteCB *read_cb = new dramsim_callback_t(this, &MemoryController::read_return_cb);
+	DRAMSim::TransactionCompleteCB *write_cb = new dramsim_callback_t(this, &MemoryController::write_return_cb);
+	mem->RegisterCallbacks(read_cb, write_cb, NULL);
+
+#endif
+    
+    printf("No DRAMSim in MemControl\n");
+
+    for (int i = 0; i < MEM_BANKS; i++) {
+	accesses_user[i] = accesses_kernel[i] = 0;
+	reads_user[i] = reads_kernel[i] = 0;
+	writes_user[i] = writes_kernel[i] = 0;
     }
 
     /* Convert latency from ns to cycles */
@@ -98,7 +129,7 @@ bool MemoryController::handle_interconnect_cb(void *arg)
 {
 	Message *message = (Message*)arg;
 
-	memdebug("Received message in Memory controller: ", *message, endl);
+	memdebug("Received message in Memory controller: " ,get_name() , " ", *message, endl);
 
 	if(message->hasData && message->request->get_type() !=
 			MEMORY_OP_UPDATE)
@@ -171,9 +202,38 @@ bool MemoryController::handle_interconnect_cb(void *arg)
 	if(banksUsed_[bank_no] == 0) {
 		banksUsed_[bank_no] = 1;
 		queueEntry->inUse = true;
+#ifndef DRAMSIM
 		marss_add_event(&accessCompleted_, latency_,
 				queueEntry);
+#endif
 	}
+#ifdef DRAMSIM
+	MemoryRequest *memRequest = queueEntry->request;
+	uint64_t physicalAddress = memRequest->get_physical_address();
+	// align the request; for now assume a 64 byte transaction 
+	// FIXME: in the future there should be some mechanism to check that the size
+	// 	of a transaction and maybe make sure it matches the LLC line size
+	physicalAddress = ALIGN_ADDRESS(physicalAddress, dramsim_transaction_size); 
+    
+    /* This fixes issue #9: since we assume a write-allocate policy for MARSS,
+     * a MEMORY_OP_WRITE which corresponds to a write miss should be treated as
+     * a read operation in DRAMSim2. Once the line is brought into the cache it
+     * will be modified. Therefore, data writebacks will only happen on an
+     * MEMORY_OP_UPDATE operation when a dirty line is evicted from the cache. 
+     */
+
+    bool isWrite = memRequest->get_type() == MEMORY_OP_UPDATE;
+    bool accepted = mem->addTransaction(isWrite,physicalAddress);
+    queueEntry->inUse = true;
+    // the interconnect should have called mem->WillAcceptTransaction() via can_broadcast() before we got here, so this should always succeed
+    if (!accepted) {
+        queueEntry->request->decRefCounter();
+        //XXX: hack alert -- shouldn't be allocating this entry in the first place if the transaction won't be accepted
+        pendingRequests_.free(queueEntry); 
+        ptl_logfile << "###### DRAMSIM REJECTING "<< *(queueEntry->request)<<endl; 
+        assert(0);
+    }
+#endif
 
 	return true;
 }
@@ -186,13 +246,55 @@ void MemoryController::print(ostream& os) const
     os << "banksUsed_: ", banksUsed_, endl;
 	os << "---End Memory-Controller: ", get_name(), endl;
 }
+#ifdef DRAMSIM
+void MemoryController::write_return_cb(uint id, uint64_t addr, uint64_t cycle)
+{
+	MemoryQueueEntry *queueEntry = NULL;
+	memdebug("[DRAMSIM] WRITE ACK" <<std::hex<<addr<<std::dec);
 
+	foreach_list_mutable(pendingRequests_.list(), queueEntry, entry_t,
+			prev_t) {
+		if (ALIGN_ADDRESS(queueEntry->request->get_physical_address(),dramsim_transaction_size) == addr)
+		{
+			memdebug("[DRAMSIM] entry for address "<< std::hex << addr << std::dec);
+			access_completed_cb(queueEntry);
+			return;
+		}
+	}
+	assert(0);
+}
+
+void MemoryController::read_return_cb(uint id, uint64_t addr, uint64_t cycle)
+{
+	//make sure something is there
+//	assert(pending_map.find(addr) != pending_map.end());
+	// no delay here since we've already waited up to this cycle
+//	Message *message = pending_map[addr];
+	MemoryQueueEntry *queueEntry = NULL;
+
+
+	memdebug("[DRAMSIM] READ RETURN 0x"<<std::hex<<addr<<std::dec);
+
+	foreach_list_mutable(pendingRequests_.list(), queueEntry, entry_t,
+			prev_t) {
+		if (ALIGN_ADDRESS(queueEntry->request->get_physical_address(),dramsim_transaction_size) == addr)
+		{
+			memdebug("[DRAMSIM] entry for address "<< std::hex << addr << queueEntry->request << std::dec);
+			access_completed_cb(queueEntry);
+			return;
+		}
+	}
+	assert(0);
+
+}
+
+#endif
 bool MemoryController::access_completed_cb(void *arg)
 {
     MemoryQueueEntry *queueEntry = (MemoryQueueEntry*)arg;
 
+#ifndef DRAMSIM
     bool kernel = queueEntry->request->is_kernel();
-
     int bank_no = get_bank_id(queueEntry->request->
             get_physical_address());
     banksUsed_[bank_no] = 0;
@@ -229,31 +331,34 @@ bool MemoryController::access_completed_cb(void *arg)
             break;
         }
     }
+#endif
 
     if(!queueEntry->annuled) {
 
         /* Send response back to cache */
         memdebug("Memory access done for Request: ", *queueEntry->request,
                 endl);
-
         wait_interconnect_cb(queueEntry);
     } else {
+		 memdebug("!!!!!annuled entry!!!"); 
         queueEntry->request->decRefCounter();
         ADD_HISTORY_REM(queueEntry->request);
         pendingRequests_.free(queueEntry);
     }
 
-    return true;
+	return true;
 }
 
 bool MemoryController::wait_interconnect_cb(void *arg)
 {
+
 	MemoryQueueEntry *queueEntry = (MemoryQueueEntry*)arg;
 
 	bool success = false;
 
 	/* Don't send response if its a memory update request */
 	if(queueEntry->request->get_type() == MEMORY_OP_UPDATE) {
+		memdebug("!!!! ignoring update request !!!!" );
 		queueEntry->request->decRefCounter();
 		ADD_HISTORY_REM(queueEntry->request);
 		pendingRequests_.free(queueEntry);
@@ -279,7 +384,7 @@ bool MemoryController::wait_interconnect_cb(void *arg)
 	} else {
 		queueEntry->request->decRefCounter();
 		ADD_HISTORY_REM(queueEntry->request);
-        pendingRequests_.free(queueEntry);
+		pendingRequests_.free(queueEntry);
 
 		if(!pendingRequests_.isFull()) {
 			memoryHierarchy_->set_controller_full(this, false);
@@ -333,6 +438,66 @@ void MemoryController::dump_configuration(YAML::Emitter &out) const
 	YAML_KEY_VAL(out, "pending_queue_size", pendingRequests_.size());
 
 	out << YAML::EndMap;
+}
+
+void MemoryController::reset_lastcycle_stats()
+{
+	for (int  i = 0; i < MEM_BANKS; i++) {
+		*(new_stats.bank_access)(user_stats) = accesses_user[i];
+		*(new_stats.bank_access)(kernel_stats) = accesses_kernel[i];
+		*(new_stats.bank_read)(user_stats) = reads_user[i];
+		*(new_stats.bank_read)(kernel_stats) = reads_kernel[i];
+		*(new_stats.bank_write)(user_stats) = writes_user[i];
+		*(new_stats.bank_write)(kernel_stats) = writes_kernel[i];
+	}
+}
+
+void MemoryController::dump_mcpat_configuration(root_system *mcpat, W32 core)
+{
+	mcpat->mem.num_banks_of_DRAM_chip = MEM_BANKS;
+	mcpat->mem.number_ranks = MEM_BANKS / 8;
+	mcpat->mem.internal_prefetch_of_DRAM_chip = 4;
+	mcpat->mem.burstlength_of_DRAM_chip = 8;
+	mcpat->mem.output_width_of_DRAM_chip = 8;
+	mcpat->mem.Block_width_of_DRAM_chip = 64;
+	mcpat->mem.peak_transfer_rate = 6400;
+	mcpat->mem.page_size_of_DRAM_chip = 8;
+	mcpat->mem.capacity_per_channel = ram_size / 2;
+	mcpat->mem.device_clock = 200;
+	mcpat->mem.mem_tech_node = 65;
+}
+
+void MemoryController::dump_mcpat_stats(root_system *mcpat, W32 core)
+{
+	W64 accesses = 0, reads = 0, writes = 0, stored_accesses = 0, stored_reads = 0, stored_writes = 0;
+	W64 acc_user[MEM_BANKS], acc_kernel[MEM_BANKS], rds_user[MEM_BANKS], rds_kernel[MEM_BANKS];
+	W64 wrs_user[MEM_BANKS], wrs_kernel[MEM_BANKS];
+
+	for (int  i = 0; i < MEM_BANKS; i++) {
+		acc_user[i] = *(new_stats.bank_access)(user_stats);
+		acc_kernel[i] = *(new_stats.bank_access)(kernel_stats);
+		rds_user[i] = *(new_stats.bank_read)(user_stats); 
+		rds_kernel[i] = *(new_stats.bank_read)(kernel_stats); 
+		wrs_user[i] = *(new_stats.bank_write)(user_stats); 
+		wrs_kernel[i] = *(new_stats.bank_write)(kernel_stats); 
+		accesses += acc_user[i] + acc_kernel[i];
+		reads += rds_user[i] + rds_kernel[i];
+		writes += wrs_user[i] + wrs_kernel[i];
+		stored_accesses += accesses_user[i] + accesses_kernel[i];
+		stored_reads += rds_user[i] + rds_kernel[i];
+		stored_writes += wrs_user[i] + wrs_kernel[i];
+	}
+	mcpat->mc.memory_accesses = accesses - stored_accesses;
+	mcpat->mc.memory_reads = reads - stored_reads;
+	mcpat->mc.memory_writes = writes - stored_writes;
+	for (int  i = 0; i < MEM_BANKS; i++) {
+		accesses_user[i] = acc_user[i];
+		accesses_kernel[i] = acc_kernel[i];
+		reads_user[i] = rds_user[i];
+		reads_kernel[i] = rds_kernel[i];
+		writes_user[i] = wrs_user[i];
+		writes_kernel[i] = wrs_kernel[i];
+	}
 }
 
 /* Memory Controller Builder */

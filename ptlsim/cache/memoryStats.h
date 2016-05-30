@@ -75,11 +75,25 @@ struct BaseCacheStats : public Statable
 
                 hit_sub read;
                 hit_sub write;
+                hit_sub L1d_afp;
+                hit_sub fp0;
+                hit_sub pend_fail;
+                hit_sub read_dep;
+                hit_sub fp_greater0;
+                hit_sub cache_cb;
+
+
 
                 hit(Statable *parent)
                     : Statable("hit", parent)
                       , read("read", this)
                       , write("write", this)
+                      , L1d_afp("L1d_afp", this)
+                      , fp0("fp0", this)
+                      , pend_fail("pend_fail", this)
+                      , read_dep("read_dep", this)
+                      , fp_greater0("fp_greater0", this)
+                      , cache_cb("cache_cb", this)
                 {}
             } hit;
 

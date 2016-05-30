@@ -929,7 +929,7 @@ void DirectoryController::print(ostream &os) const
     os << "Queue:\n" << *pendingRequests_ << endl;
 }
 
-bool DirectoryController::is_full(bool flag) const
+bool DirectoryController::is_full(bool flag, MemoryRequest *request) const
 {
     if (pendingRequests_->count() >= (
                 pendingRequests_->size() - 10)) {
@@ -971,6 +971,27 @@ void DirectoryController::dump_configuration(YAML::Emitter &out) const
 	YAML_KEY_VAL(out, "ways", DIR_WAY);
 
 	out << YAML::EndMap;
+}
+
+void DirectoryController::dump_mcpat_configuration(root_system *mcpat, W32 core)
+{
+	W32 count = core;
+	mcpat->L2Directory[count].Directory_type = 1;
+	mcpat->L2Directory[count].Dir_config[0] = DIR_SET * DIR_WAY;
+	mcpat->L2Directory[count].Dir_config[1] = DIR_LINE_SIZE;
+	mcpat->L2Directory[count].Dir_config[2] = DIR_WAY;
+	mcpat->L2Directory[count].Dir_config[3] = 1;
+	mcpat->L2Directory[count].Dir_config[4] = 2;
+//	mcpat->L2Directory[count].Dir_config[5] = cacheAccessLatency_;
+	mcpat->L2Directory[count].buffer_sizes[0] = 8;
+	mcpat->L2Directory[count].buffer_sizes[1] = 8;
+	mcpat->L2Directory[count].buffer_sizes[2] = 8;
+	mcpat->L2Directory[count].buffer_sizes[3] = 8;
+}
+
+void DirectoryController::dump_mcpat_stats(root_system *mcpat, W32 core)
+{
+	cout << " in dir cont " << endl;
 }
 
 /**

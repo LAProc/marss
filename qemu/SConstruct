@@ -1,6 +1,8 @@
 
 # SCons File to compile QEMU
 
+import os;
+
 Import('qemu_env')
 Import('qemu_target')
 Import('ptlsim_lib')
@@ -10,7 +12,6 @@ import subprocess
 import re
 env = qemu_env
 target = qemu_target
-
 target_base_arch = "%s" % target['arch']
 if target_base_arch == "x86_64":
     target_base_arch = "i386"
@@ -22,6 +23,7 @@ env['CPPPATH'] = []
 env['CPPPATH'].append([".", "..", target_path, env['source_path']])
 env['CPPPATH'].append(target['dir'])
 env['CPPPATH'].append(ptlsim_inc_dir)
+print("ptlsim inc dir %s" % ptlsim_inc_dir)
 env.Append(CCFLAGS = "-MMD -MP -DNEED_CPU_H")
 env.Append(CCFLAGS = "-DMARSS_QEMU")
 
@@ -39,13 +41,23 @@ if int(debug):
     elif int(debug) == 2:
         env.Append(CCFLAGS = '-ggdb3')
         env.Append(CCFLAGS = '-g3')
-        env.Append(CCFLAGS = '-O0')
+        if float(GCC_MAJOR_MINOR_VERSION) >= 4.8:
+            env.Append(CCFLAGS = '-Og')
+        else:
+            env.Append(CCFLAGS = '-O0')
 else:
     env.Append(CCFLAGS = '-O3 -march=native')
+
+dramsim_path= ARGUMENTS.get('dramsim', '%s/DRAMSim2' % (os.environ['HOME'] ))
+if os.path.isdir(dramsim_path):
+    env.Append(LIBS='dramsim')
+    env.Append(LINKFLAGS='-L%s'%dramsim_path)
+    env.Append(LINKFLAGS='-Wl,-rpath=%s'%dramsim_path);
 
 google_perftools = ARGUMENTS.get('gperf', None)
 if google_perftools != None:
     env.Append(LIBS = 'tcmalloc')
+    env.Append(LIBS = 'profiler')
     env.Append(LIBPATH = google_perftools)
     env.Append(LINKFLAGS = '-Wl,-rpath')
     env.Append(LINKFLAGS = '-Wl,%s' % google_perftools)
@@ -70,6 +82,8 @@ if target['arch'] == "i386":
 env.Append(CPPFLAGS = "-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 \
         -D_LARGEFILE_SOURCE")
 env.Append(LIBS = "m")
+env.Append(LIBPATH = "/home/local/bumblebee/masri/marss-i7-920.bak")
+env.Append(LIBS = "mcpat")
 
 #######################
 # QObject
@@ -391,6 +405,8 @@ hw_files += " usb-ohci.c"
 # hw_files += " eeprom93xx.c"
 hw_files += " eepro100.c ne2000.c pcnet-pci.c pcnet.c rtl8139.c e1000.c"
 # hw_files += " msmouse.c"
+# HAO: LAP file
+hw_files += " lap.c"
 
 if target_base_arch == "i386":
     hw_files += " pckbd.c vga.c dma.c vga-isa.c vga-pci.c ioapic.c"

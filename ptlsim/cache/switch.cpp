@@ -40,6 +40,12 @@ void Switch::register_controller(Controller *controller)
     controllers.push(cq);
 }
 
+
+void Switch::hit_patch_count(Controller * controller, MemoryRequest *request)
+{
+
+}
+
 int Switch::access_fast_path(Controller *controller,
         MemoryRequest *request)
 {

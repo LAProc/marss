@@ -34,6 +34,8 @@
 #include <memoryStats.h>
 //#include <logic.h>
 
+#include <mcpat.h>
+
 namespace Memory {
 
 struct CPUControllerQueueEntry : public FixStateListObject
@@ -43,6 +45,7 @@ struct CPUControllerQueueEntry : public FixStateListObject
 	int depends;
     int waitFor;
 	bool annuled;
+  bool depend_miss;
 
 	void init() {
 		request = NULL;
@@ -50,6 +53,7 @@ struct CPUControllerQueueEntry : public FixStateListObject
 		depends = -1;
         waitFor = -1;
 		annuled = false;
+    depend_miss = false;
 	}
 
 	ostream& print(ostream& os) const {
@@ -143,6 +147,9 @@ class CPUController : public Controller
 		bool cache_access_cb(void *arg);
 		bool queue_access_cb(void *arg);
 
+    //MOCH patch
+    void hit_patch_count(Interconnect *interconnect, MemoryRequest *request);
+
 		int access_fast_path(Interconnect *interconnect,
 				MemoryRequest *request);
 		void clock();
@@ -153,7 +160,10 @@ class CPUController : public Controller
 		bool is_cache_availabe(bool is_icache);
 		void annul_request(MemoryRequest *request);
 		int flush();
+		void reset_lastcycle_stats() {}
 		void dump_configuration(YAML::Emitter &out) const;
+		void dump_mcpat_configuration(root_system *mcpat, W32 core);
+		void dump_mcpat_stats(root_system *mcpat, W32 core);
 
         void set_icacheLineBits(int i) {
             icacheLineBits_ = i;
@@ -167,8 +177,12 @@ class CPUController : public Controller
 			return access_fast_path(NULL, request);
 		}
 
-		bool is_full(bool fromInterconnect = false) const {
+		bool is_full(bool fromInterconnect = false, MemoryRequest *request = NULL) const {
 			return pendingRequests_.isFull();
+		}
+
+		bool is_empty() const {
+			return (pendingRequests_.count() == 0);
 		}
 
 		void print_map(ostream& os)

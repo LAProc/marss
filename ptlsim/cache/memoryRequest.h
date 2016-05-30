@@ -40,6 +40,7 @@ enum OP_TYPE {
 	MEMORY_OP_WRITE,  /* Indicates cache miss on a write/store operation */
 	MEMORY_OP_UPDATE, /* Indicates cache write-back request */
 	MEMORY_OP_EVICT,  /* Indicates cache evict request */
+	MEMORY_OP_TSX,    /* Indicate Intel TSX operation */
 	NUM_MEMORY_OP
 };
 
@@ -47,7 +48,8 @@ static const char* memory_op_names[NUM_MEMORY_OP] = {
 	"memory_op_read",
 	"memory_op_write",
 	"memory_op_update",
-	"memory_op_evict"
+	"memory_op_evict",
+	"memory_op_tsx",
 };
 
 class MemoryRequest: public selfqueuelink
@@ -86,6 +88,28 @@ class MemoryRequest: public selfqueuelink
 				W64 ownerRIP,
 				W64 ownerUUID,
 				OP_TYPE opType);
+
+
+		void init_sse(W8 coreId,
+				W8 threadId,
+				W64 physicalAddress,
+				int robId,
+				W64 cycles,
+				bool isInstruction,
+				W64 ownerRIP,
+				W64 ownerUUID,
+				OP_TYPE opType, bool sse_load);
+
+
+		void init_pref(W8 coreId,
+				W8 threadId,
+				W64 physicalAddress,
+				int robId,
+				W64 cycles,
+				bool isInstruction,
+				W64 ownerRIP,
+				W64 ownerUUID,
+				OP_TYPE opType, bool pref, int cachelevel );
 
 		bool is_same(W8 coreid,
 				W8 threadid,
@@ -166,6 +190,12 @@ class MemoryRequest: public selfqueuelink
             }
 			return os;
 		}
+
+    //MOCH
+    bool ld_sse;
+    bool is_pref;
+    bool cache_level;
+    bool depend_miss;
 
 	private:
 		W8 coreId_;

@@ -22,6 +22,7 @@
 #define INVALID_MFN 0xffffffffffffffffULL
 #define INVALID_PHYSADDR 0xffffffffffffffffULL
 
+#define POWER_PERIOD 0
 #define contextcount smp_cpus
 
 void user_process_terminated(int rc);
@@ -51,8 +52,8 @@ struct PTLsimMachine : public Statable {
   bool first_run;
   Context* ret_qemu_env;
   PTLsimMachine() : Statable("machine") {
-    initialized = 0; stopped = 0;
-    handle_cpuid = NULL;
+      initialized = 0; stopped = 0;
+      handle_cpuid = NULL;
   }
 
   virtual bool init(PTLsimConfig& config);
@@ -61,8 +62,17 @@ struct PTLsimMachine : public Statable {
   virtual void dump_state(ostream& os);
   virtual void flush_tlb(Context& ctx);
   virtual void flush_tlb_virt(Context& ctx, Waddr virtaddr);
+//  virtual void reset_lastcycle_stats();
   virtual void dump_configuration(ostream& os) const;
+  virtual void dump_mcpat_configuration();
+  virtual void dump_machine_area();
+  virtual void dump_machine_tdp();
+  virtual void dumpTraces();
+  virtual void compute_power();
   virtual void reset(){};
+#ifdef DRAMSIM
+  virtual void simulation_done();
+#endif
   virtual void shutdown(){};
   static void addmachine(const char* name, PTLsimMachine* machine);
   static void removemachine(const char* name, PTLsimMachine* machine);
@@ -71,14 +81,14 @@ struct PTLsimMachine : public Statable {
 
   stringbuf machine_name;
   int (*handle_cpuid)(uint32_t index, uint32_t count, uint32_t *eax,
-      uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
+          uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
 
   Context& contextof(W8 i) {
-    return *ptl_contexts[i];
+	  return *ptl_contexts[i];
   }
 
   virtual W8 get_num_cores() {
-    return NUMBER_OF_CORES;
+      return NUMBER_OF_CORES;
   }
 };
 
@@ -87,7 +97,7 @@ void setup_qemu_switch_except_ctx(const Context& const_ctx);
 void setup_ptlsim_switch_all_ctx(Context& const_ctx);
 
 inline Context& contextof(W8 i) {
-  return *ptl_contexts[i];
+	return *ptl_contexts[i];
 }
 
 /* Checker */
@@ -140,6 +150,8 @@ void print_sysinfo(ostream& os);
 void backup_and_reopen_logfile();
 void backup_and_reopen_mem_logfile();
 void backup_and_reopen_yamlstats();
+void open_power_logfile();
+void flush_power_logfile();
 void shutdown_subsystems();
 
 bool simulate(const char* machinename);
@@ -164,12 +176,15 @@ struct PTLsimStats;
 
 extern ofstream ptl_logfile;
 extern ofstream trace_mem_logfile;
+extern ofstream powerFile;
+extern ofstream statsFile;
 extern W64 sim_cycle;
 extern W64 user_insn_commits;
 extern W64 iterations;
 extern W64 total_uops_executed;
 extern W64 total_uops_committed;
 extern W64 total_insns_committed;
+extern W64 total_user_insns_committed;
 extern W64 total_basic_blocks_committed;
 
 // #define TRACE_RIP
@@ -209,8 +224,6 @@ struct PTLsimConfig {
   stringbuf screenshot_file;
   bool log_user_only;
   stringbuf dump_config_filename;
-
-  bool logMemory;
 
   bool dump_state_now;
   bool abort_at_end;
@@ -289,6 +302,25 @@ struct PTLsimConfig {
   W64 simpoint_interval;
   stringbuf simpoint_chk_name;
 
+#ifdef DRAMSIM
+  // DRAMSim2 options
+  stringbuf dramsim_device_ini_file;
+  stringbuf dramsim_system_ini_file;
+  stringbuf dramsim_pwd;
+  stringbuf dramsim_results_dir_name;
+  stringbuf dramsim_outputfile;
+#endif
+
+  // Gather per-cycle Power
+  bool runMcPAT;
+  W64 powerPeriod;
+  bool dumpMcpatStats;
+  bool dumpVoltage;
+  bool dumpArea;
+  bool dumpTDP;
+  stringbuf powerFileName;
+  W64 core_tech;
+
   void reset();
 
 };
@@ -305,13 +337,11 @@ extern bool logenable;
 #else
 #define logable(level) (unlikely (logenable && (config.loglevel >= level)))
 #define logfuncwith(func, new_loglevel) {\
-  int old_loglevel = config.loglevel; config.loglevel = new_loglevel; \
-  func ; \
-  config.loglevel = old_loglevel; \
-}
+    int old_loglevel = config.loglevel; config.loglevel = new_loglevel; \
+    func ; \
+    config.loglevel = old_loglevel; \
+    }
 #endif
-
-#define logMem config.logMemory
 
 void force_logging_enabled();
 

@@ -50,6 +50,8 @@ BusInterconnect::BusInterconnect(const char *name,
     memoryHierarchy_->add_interconnect(this);
     new_stats = new BusStats(name, &memoryHierarchy->get_machine());
 
+    reads_user = reads_kernel = writes_user = writes_kernel = 0;
+
     SET_SIGNAL_CB(name, "_Broadcast", broadcast_, &BusInterconnect::broadcast_cb);
 
     SET_SIGNAL_CB(name, "_Broadcast_Complete", broadcastCompleted_,
@@ -100,6 +102,12 @@ void BusInterconnect::register_controller(Controller *controller)
     controllers.push(busControllerQueue);
 }
 
+void BusInterconnect::hit_patch_count(Controller * controller, MemoryRequest *request)
+{
+
+  
+}
+
 int BusInterconnect::access_fast_path(Controller *controller,
         MemoryRequest *request)
 {
@@ -139,6 +147,8 @@ bool BusInterconnect::controller_request_cb(void *arg)
 
     bool kernel = message->request->is_kernel();
 
+    //Controller *sender = (Controller*)message->sender;
+    //printf("split_bus: sender = %s\n", sender->get_name());
     /*
      * check if the request is already in pendingRequests_ queue
      * then update the hasData array in that queue
@@ -147,6 +157,7 @@ bool BusInterconnect::controller_request_cb(void *arg)
     foreach_list_mutable(pendingRequests_.list(), pendingEntry,
             entry, nextentry) {
         if(pendingEntry->request == message->request) {
+            //printf("split_bus: message request is pending.\n");
             memdebug("Bus Response received for: ", *pendingEntry);
             int idx = -1;
             Controller *sender = (Controller*)message->sender;
@@ -161,10 +172,12 @@ bool BusInterconnect::controller_request_cb(void *arg)
 
             /* If response has data mark this controller */
             if(message->hasData) {
+                //printf("split_bus: has data.\n");
                 pendingEntry->controllerWithData = sender;
             }
 
             if(sender->is_private()) {
+                //printf("split_bus: private.\n");
                 pendingEntry->shared |= message->isShared;
 
                 /*
@@ -182,13 +195,16 @@ bool BusInterconnect::controller_request_cb(void *arg)
                 }
             }
 
+            //printf("split_bus: data_busy:%d\n", dataBusBusy_);
             if(!dataBusBusy_) {
                 bool all_set = true;
                 foreach(x, pendingEntry->responseReceived.count()) {
+                    //printf("pending entry %d response received: %d\n", x, pendingEntry->responseReceived[x]);
                     all_set &= pendingEntry->responseReceived[x];
                 }
                 if(all_set || (snoopDisabled_ && pendingEntry->controllerWithData)) {
                     dataBusBusy_ = true;
+                    //printf("Broadcasting...\n");
                     marss_add_event(&dataBroadcast_, 1,
                             pendingEntry);
                 }
@@ -212,6 +228,7 @@ bool BusInterconnect::controller_request_cb(void *arg)
 
     if (busControllerQueue->queue.isFull()) {
         N_STAT_UPDATE(new_stats->bus_not_ready, ++, kernel);
+        //printf("split_bus queue full.\n");
         memdebug("Bus queue is full\n");
         return false;
     }
@@ -228,10 +245,12 @@ bool BusInterconnect::controller_request_cb(void *arg)
 
     if(!is_busy()) {
         /* address bus */
+        //printf("Broadcasting...\n");
         marss_add_event(&broadcast_, 1, NULL);
         set_bus_busy(true);
     } else {
         N_STAT_UPDATE(new_stats->bus_not_ready, ++, kernel);
+        //printf("Bus is busy!\n");
         memdebug("Bus is busy\n");
     }
 
@@ -265,13 +284,13 @@ BusQueueEntry* BusInterconnect::arbitrate_round_robin()
     return NULL;
 }
 
-bool BusInterconnect::can_broadcast(BusControllerQueue *queue)
+bool BusInterconnect::can_broadcast(BusControllerQueue *queue, MemoryRequest *request)
 {
     bool isFull = false;
     foreach(i, controllers.count()) {
         if(controllers[i]->controller == queue->controller)
             continue;
-        isFull |= controllers[i]->controller->is_full(true);
+        isFull |= controllers[i]->controller->is_full(true, request);
     }
     if(isFull) {
         return false;
@@ -281,6 +300,7 @@ bool BusInterconnect::can_broadcast(BusControllerQueue *queue)
 
 bool BusInterconnect::broadcast_cb(void *arg)
 {
+    //printf("Inside broadcast cb.\n");
     BusQueueEntry *queueEntry;
     if(arg != NULL)
         queueEntry = (BusQueueEntry*)arg;
@@ -313,7 +333,7 @@ bool BusInterconnect::broadcast_cb(void *arg)
      * entry and  pass the queue entry as argument to the broadcast
      * signal so next time it doesn't need to arbitrate
      */
-    if(!can_broadcast(queueEntry->controllerQueue)) {
+    if(!can_broadcast(queueEntry->controllerQueue, queueEntry->request)) {
         memdebug("Bus cant do addr broadcast\n");
         set_bus_busy(true);
         marss_add_event(&broadcast_,
@@ -331,6 +351,7 @@ bool BusInterconnect::broadcast_cb(void *arg)
 
 bool BusInterconnect::broadcast_completed_cb(void *arg)
 {
+    //printf("Inside broadcast complete cb.\n");
     assert(is_busy());
     BusQueueEntry *queueEntry = (BusQueueEntry*)arg;
 
@@ -339,7 +360,7 @@ bool BusInterconnect::broadcast_completed_cb(void *arg)
         return true;
     }
 
-	if(!can_broadcast(queueEntry->controllerQueue)) {
+	if(!can_broadcast(queueEntry->controllerQueue, queueEntry->request)) {
 		set_bus_busy(true);
 		marss_add_event(&broadcastCompleted_,
 				2, NULL);
@@ -372,7 +393,10 @@ bool BusInterconnect::broadcast_completed_cb(void *arg)
     Controller *controller = queueEntry->controllerQueue->controller;
 
     foreach(i, controllers.count()) {
+        //printf("Trying to send message to %d\n", i);
+        //cout << message << endl;
         if(controller != controllers[i]->controller) {
+            //printf("Sending...\n");
             bool ret = controllers[i]->controller->
                 get_interconnect_signal()->emit(&message);
             assert(ret);
@@ -381,6 +405,7 @@ bool BusInterconnect::broadcast_completed_cb(void *arg)
              * its the originating controller, mark its
              * response received flag to true
              */
+            //printf("is original controller.\n");
             if(pendingEntry)
                 pendingEntry->responseReceived[i] = true;
         }
@@ -454,6 +479,7 @@ void BusInterconnect::set_data_bus()
 
 bool BusInterconnect::data_broadcast_cb(void *arg)
 {
+    //printf("broadcast_cb HERE\n");
     PendingQueueEntry *pendingEntry = (PendingQueueEntry*)arg;
     assert(pendingEntry);
 
@@ -463,7 +489,7 @@ bool BusInterconnect::data_broadcast_cb(void *arg)
      * entry and  pass the queue entry as argument to the broadcast
      * signal so next time it doesn't need to arbitrate
      */
-    if(!can_broadcast(pendingEntry->controllerQueue)) {
+    if(!can_broadcast(pendingEntry->controllerQueue, pendingEntry->request)) {
         marss_add_event(&dataBroadcast_,
                 latency_, arg);
         return true;
@@ -482,6 +508,7 @@ bool BusInterconnect::data_broadcast_cb(void *arg)
 
 bool BusInterconnect::data_broadcast_completed_cb(void *arg)
 {
+    //printf("broadcast_complete_cb HERE\n");
     PendingQueueEntry *pendingEntry = (PendingQueueEntry*)arg;
     assert(pendingEntry);
 
@@ -550,6 +577,51 @@ void BusInterconnect::dump_configuration(YAML::Emitter &out) const
 				controllers[0]->queue.size());
 
 	out << YAML::EndMap;
+}
+
+void BusInterconnect::reset_lastcycle_stats()
+{
+	new_stats->broadcast_cycles.read(user_stats) = reads_user;
+	new_stats->broadcast_cycles.read(kernel_stats) = reads_kernel;
+	new_stats->broadcast_cycles.write(user_stats) = writes_user;
+        new_stats->broadcast_cycles.write(kernel_stats) = writes_kernel;
+}
+
+void BusInterconnect::dump_mcpat_configuration(root_system *mcpatData, W32 count)
+{
+	int idx = mcpatData->number_of_NoCs;
+	system_NoC *noc = &(mcpatData->NoC[idx]);
+	noc->clockrate = mcpatData->target_core_clockrate;
+	noc->type = 0;
+	noc->input_ports = 1;
+	noc->output_ports = 1;
+	noc->duty_cycle = 1;
+	noc->has_global_link = false;
+	noc->link_latency = latency_ * mcpatData->target_core_clockrate;	
+	noc->link_throughput = 1;
+	noc->input_buffer_entries_per_vc = controllers[0]->queue.size();
+	noc->flit_bits = 256;
+	mcpatData->number_of_NoCs++;
+	double coverage = 1.0/mcpatData->number_of_NoCs;
+	for (int i = 0; i < mcpatData->number_of_NoCs; i++) {
+		system_NoC *n = &(mcpatData->NoC[i]);
+		n->chip_coverage = coverage;
+	}
+	cout << " num noc: " << mcpatData->number_of_NoCs << " noc chip coverage: " << noc->chip_coverage << endl;
+}
+
+void BusInterconnect::dump_mcpat_stats(root_system *mcpatData, W32 idx)
+{
+	system_NoC *noc = &(mcpatData->NoC[idx]);
+	W64 ruser = new_stats->broadcast_cycles.read(user_stats);
+	W64 rkernel = new_stats->broadcast_cycles.read(kernel_stats);
+	W64 wuser = new_stats->broadcast_cycles.write(user_stats);
+        W64 wkernel = new_stats->broadcast_cycles.write(kernel_stats);
+	noc->total_accesses = (ruser + rkernel + wuser + wkernel) - (reads_user + reads_kernel + writes_user + writes_kernel);
+	reads_user = ruser;
+	reads_kernel = rkernel;
+	writes_user = writes_user;
+	writes_kernel = writes_kernel;
 }
 
 struct SplitPhaseBusBuilder : public InterconnectBuilder

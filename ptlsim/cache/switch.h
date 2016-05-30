@@ -139,11 +139,15 @@ namespace SwitchInterconnect {
 
             bool controller_request_cb(void *arg);
             void register_controller(Controller *controller);
+            void hit_patch_count(Controller * controller, MemoryRequest *request);
             int  access_fast_path(Controller *controller,
                     MemoryRequest *request);
             void annul_request(MemoryRequest *request);
             int  get_delay() { return latency_; }
-			void dump_configuration(YAML::Emitter &out) const;
+	    void reset_lastcycle_stats() {}
+	    void dump_configuration(YAML::Emitter &out) const;
+	    void dump_mcpat_configuration(root_system *mcpatData, W32 idx) {}
+	    void dump_mcpat_stats(root_system *mcpatData, W32 idx) {}
 
             ControllerQueue* get_queue(Controller *cont);
 
@@ -169,6 +173,14 @@ namespace SwitchInterconnect {
                     os << "\t\tcontroller[", i, "]: ";
                     os << controllers[i]->controller->get_name(), endl;
                 }
+            }
+
+            bool is_empty() const {
+                foreach (i, controllers.count()) {
+                    if (controllers[i]->queue.count() > 0)
+                        return false;
+                }
+                return true;
             }
     };
 

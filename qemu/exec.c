@@ -1678,6 +1678,7 @@ void cpu_reset_interrupt(CPUState *env, int mask)
 
 void cpu_exit(CPUState *env)
 {
+    //printf("CPU EXIT on eip: %x\n", env->eip);
     env->exit_request = 1;
     cpu_unlink_tb(env);
 }

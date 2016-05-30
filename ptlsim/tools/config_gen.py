@@ -48,6 +48,7 @@ machine_includes = '''
 #include <globals.h>
 #include <machine.h>
 #include <basecore.h>
+#include <accelerator.h>
 #include <memoryHierarchy.h>
 #include <cpuController.h>
 
@@ -108,13 +109,26 @@ machine_core_create = '''
         if (machine.context_used.allset()) break;
 '''
 
+machine_accelerator_create = '''
+    machine.accelerators.push(new Core::Accelerator(machine, "%s"));
+'''
+
 machine_controller_create = '''
         ControllerBuilder::add_new_cont(machine, i, "%s", "%s", %s);
+'''
+
+machine_controller_create_for_accelerator = '''
+    ControllerBuilder::add_new_cont(machine, %s, "%s", "%s", %s);
 '''
 
 machine_connection_def = '''
         ConnectionDef* connDef = machine.get_new_connection_def("%s",
                 "%s", i);
+
+'''
+
+machine_add_connection_solo = '''
+        machine.add_new_connection(connDef, %s.buf, %s);
 
 '''
 
@@ -415,6 +429,10 @@ def write_core_logic(config, m_conf, of):
             core["type"]))
     of.write(machine_loop_end)
 
+def write_accelerator_logic(config, m_conf, of):
+    for accelerator in m_conf["accelerators"]:
+        of.write(machine_accelerator_create % (accelerator["name"]));
+
 def write_cont_logic(config, m_conf, of, n1, n2):
     for cache in m_conf[n1]:
         assert config[n2].has_key(cache["type"]), \
@@ -474,7 +492,7 @@ def write_interconn_logic(config, m_conf, of):
                     if 'core' not in cont:
                         c_cfg = get_cache_cfg(m_conf, cont.rstrip('$'))
                         assert c_cfg, "Can't find cache for %s" % cont
-                        assert c_cfg["insts"] == "$NUMCORES"
+                        assert c_cfg["insts"] == "$NUMCORES", "Cont = %s" % cont
 
             all_conts = False
             for cont in conn.keys():
@@ -561,9 +579,17 @@ def write_interconn_logic(config, m_conf, of):
                                 key, val)
 
                 for cont, conn_type in conn.items():
-                    conn_type = 'INTERCONN_TYPE_%s' % conn_type
-                    of.write(machine_add_connection % (cont,
-                        cont, cont, cont, conn_type))
+                    if conn_type == "ID":
+                        conn_type = 'INTERCONN_TYPE_I'
+                        of.write(machine_add_connection % (cont,
+                            cont, cont, cont, conn_type))
+                        conn_type = 'INTERCONN_TYPE_D'
+                        of.write(machine_add_connection_solo % (
+                            cont, conn_type))
+                    else:
+                        conn_type = 'INTERCONN_TYPE_%s' % conn_type
+                        of.write(machine_add_connection % (cont,
+                            cont, cont, cont, conn_type))
 
                 of.write(machine_loop_end)
 
@@ -631,11 +657,18 @@ def generate_machine(config, options):
         # Write core creation
         write_core_logic(config, m_conf, of)
 
+        # HAO: Write accelarator creation
+        write_accelerator_logic(config, m_conf, of)
+
         # Write CPUControllers for each core
         of.write(machine_for_each_core_loop_i)
         of.write(machine_controller_create % ("core_", "cpu", "0"))
         of.write(machine_loop_end)
 
+        # XXX Allows only one accelerator right now.
+        of.write(machine_controller_create_for_accelerator %
+            #("machine.get_num_cores()", "lap_", "cpu", "0"))
+            (0, "lap_", "cpu", "0"))
         # Write each cache controllers
         write_cache_cont_logic(config, m_conf, of)
 

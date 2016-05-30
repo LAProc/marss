@@ -1,7 +1,8 @@
-MARSS-x86 : Micro-Architecture & System Simulator for x86
+MARSS-x86 : Micro-Architecture & System Simulator for x86-i7_920
 =========================================================
 
 Copyright 2010 Avadh Patel (apatel @ cs.binghamton.edu)
+Copyright 2016 Mochamad Asri (asri @ utexas.edu)
 
 Marss-x86 is a simulation tool for x86-64 based Computing Systems.  It is based
 on two independent open-source projects QEMU (http://www.qemu.org/) and
@@ -9,6 +10,20 @@ PTLsim (http://www.ptlsim.org/).  Marss-x86 is developed at Computer
 Architecture Group of SUNY Binghamton by Avadh Patel and other group Members.
 
 You can find out more details about Marss go to (http://www.marss86.org/). 
+
+This version of MARSS-x86 has been calibrated to closely match i7-920 machine 
+targetting High Performance Computing (HPC) domain. Furthermore, an
+accelerator has also been integrated to the system as a case study of
+heterogenous system architecture design.
+
+These extensions were developed by Mochamad Asri at The University of Texas 
+at Austin. 
+
+For details, please refer to 
+Mochamad Asri, Ardavan Pedram, Lizy K.John, Andreas Gerstlauer,
+"Simulator Calibration for Accelerator-Rich Architecture Studies"
+International Conference on Embedded Computer Systems : Architectures,
+Modeling and Simulation (SAMOS XV), Samos, Greece, July 2016
 
 
 System Requirements

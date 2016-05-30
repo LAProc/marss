@@ -29,12 +29,13 @@
 #define BUS_H
 
 #include <interconnect.h>
+#include <mcpat.h>
 
 namespace Memory {
 
 // Bus Dealys
 const int BUS_ARBITRATE_DELAY = 1;
-const int BUS_BROADCASTS_DELAY = 6;
+const int BUS_BROADCASTS_DELAY = 0;
 
 struct BusControllerQueue;
 
@@ -99,7 +100,13 @@ class BusInterconnect : public Interconnect
 				MemoryRequest *request);
 		void print_map(ostream& os);
 		void annul_request(MemoryRequest *request);
+		void reset_lastcycle_stats() {}
 		void dump_configuration(YAML::Emitter &out) const;
+		void dump_mcpat_configuration(root_system *mcpatData, W32 idx);
+		void dump_mcpat_stats(root_system *mcpatData, W32 idx);
+
+
+    void hit_patch_count(Controller * controller, MemoryRequest *request);
 
 		// Bus delay in sending message is BUS_BROADCASTS_DELAY
 		int get_delay() {
@@ -119,6 +126,15 @@ class BusInterconnect : public Interconnect
 		bool broadcast_completed_cb(void *arg);
 		bool data_broadcast_cb(void *arg);
 		bool data_broadcast_completed_cb(void *arg);
+
+		bool is_empty() const {
+			foreach (i, controllers.count()) {
+				if (controllers[i]->queue.count() > 0 ||
+						controllers[i]->dataQueue.count() > 0)
+					return false;
+			}
+			return true;
+		}
 };
 
 static inline ostream& operator <<(ostream& os,

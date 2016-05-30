@@ -69,6 +69,67 @@ void MemoryRequest::init(W8 coreId,
 	memdebug("Init ", *this, endl);
 }
 
+
+void MemoryRequest::init_sse(W8 coreId,
+		W8 threadId,
+		W64 physicalAddress,
+		int robId,
+		W64 cycles,
+		bool isInstruction,
+		W64 ownerRIP,
+		W64 ownerUUID,
+		OP_TYPE opType,bool sse_load)
+{
+	coreId_ = coreId;
+	threadId_ = threadId;
+	physicalAddress_ = physicalAddress;
+	robId_ = robId;
+	cycles_ = cycles;
+	ownerRIP_ = ownerRIP;
+	ownerUUID_ = ownerUUID;
+	refCounter_ = 0; // or maybe 1
+	opType_ = opType;
+	isData_ = !isInstruction;
+  ld_sse = sse_load;
+
+	if(history) delete history;
+	history = new stringbuf();
+
+	memdebug("Init ", *this, endl);
+}
+
+
+void MemoryRequest::init_pref(W8 coreId,
+		W8 threadId,
+		W64 physicalAddress,
+		int robId,
+		W64 cycles,
+		bool isInstruction,
+		W64 ownerRIP,
+		W64 ownerUUID,
+		OP_TYPE opType,bool pref, int cachelevel)
+{
+	coreId_ = coreId;
+	threadId_ = threadId;
+	physicalAddress_ = physicalAddress;
+	robId_ = robId;
+	cycles_ = cycles;
+	ownerRIP_ = ownerRIP;
+	ownerUUID_ = ownerUUID;
+	refCounter_ = 0; // or maybe 1
+	opType_ = opType;
+	isData_ = !isInstruction;
+  
+  //PATCH
+  is_pref = pref;
+  cache_level = cachelevel;
+
+	if(history) delete history;
+	history = new stringbuf();
+
+	memdebug("Init ", *this, endl);
+}
+
 void MemoryRequest::init(MemoryRequest *request)
 {
 	coreId_ = request->coreId_;

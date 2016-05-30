@@ -11,6 +11,7 @@
 #ifndef OOOCORE_CONST_H
 #define OOOCORE_CONST_H
 
+
 #ifndef OOO_ISSUE_WIDTH
 #define OOO_ISSUE_WIDTH 4
 #endif
@@ -28,7 +29,7 @@
 #endif
 
 #ifndef OOO_LOAD_Q_SIZE
-#define OOO_LOAD_Q_SIZE 48
+#define OOO_LOAD_Q_SIZE 64
 #endif
 
 #ifndef OOO_STORE_Q_SIZE
@@ -40,7 +41,7 @@
 #endif
 
 #ifndef OOO_ISSUE_Q_SIZE
-#define OOO_ISSUE_Q_SIZE 64
+#define OOO_ISSUE_Q_SIZE 36
 #endif
 
 #ifndef OOO_ROB_SIZE
@@ -72,11 +73,11 @@
 #endif
 
 #ifndef OOO_ITLB_SIZE
-#define OOO_ITLB_SIZE 32
+#define OOO_ITLB_SIZE 512
 #endif
 
 #ifndef OOO_DTLB_SIZE
-#define OOO_DTLB_SIZE 32
+#define OOO_DTLB_SIZE 512
 #endif
 
 /* functional units */
@@ -89,15 +90,15 @@
 #endif
 
 #ifndef OOO_LOAD_FU_COUNT
-#define OOO_LOAD_FU_COUNT 2
+#define OOO_LOAD_FU_COUNT 16
 #endif
 
 #ifndef OOO_STORE_FU_COUNT
-#define OOO_STORE_FU_COUNT 2
+#define OOO_STORE_FU_COUNT 16
 #endif
 
 #ifndef OOO_LOADLAT
-#define OOO_LOADLAT 2
+#define OOO_LOADLAT 1
 #endif
 
 #ifndef OOO_ALULAT
@@ -161,8 +162,13 @@ namespace OOO_CORE_MODEL {
 
 #define BIG_ROB
 
+#ifndef CALIB_VERSION
     const int ROB_SIZE = OOO_ROB_SIZE;
      /* const int ROB_SIZE = 64; */
+#else
+    //Accomodate for discrepancies in SSE counts
+    const int ROB_SIZE = OOO_ROB_SIZE * 1.8;
+#endif
 
     /* Maximum number of branches in the pipeline at any given time */
     const int MAX_BRANCHES_IN_FLIGHT = OOO_BRANCH_IN_FLIGHT;
@@ -246,7 +252,13 @@ namespace OOO_CORE_MODEL {
 
     const int MAX_FORWARDING_LATENCY = 0;
 
+#ifndef CALIB_VERSION
     static const int ISSUE_QUEUE_SIZE = OOO_ISSUE_Q_SIZE;
+#else 
+    //Accomodate for discrepancies in SSE counts
+    static const int ISSUE_QUEUE_SIZE = OOO_ISSUE_Q_SIZE * 1.8;
+#endif
+
 #endif
 
     /* TLBs */

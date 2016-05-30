@@ -167,6 +167,7 @@ bool TraceDecoder::decode_sse() {
     this << lowop;
 
     if (packed) {
+      //MOCH
       TransOp highop(uop, rdreg+1, rareg+1, rbreg+1, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
       highop.cond = imm.imm.imm;
       highop.datatype = datatype;
@@ -943,7 +944,39 @@ bool TraceDecoder::decode_sse() {
     break;
   }
 
-  case 0x328: /* movaps load */
+  case 0x328: /* movaps load */ 
+#if 0
+              {
+    DECODE(gform, rd, x_mode);
+    DECODE(eform, ra, x_mode);
+    EndOfDecode();
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
+    if (ra.type == OPTYPE_MEM) {
+       /*
+        * Load
+        * This is still idempotent since if the second one was unaligned, the first one must be too
+        */
+      bool is_sse = true;
+      int level = 0;
+      bool rmw = false;
+
+      operand_load(rdreg+0, ra, OP_ld, datatype, level, rmw, is_sse);
+      ra.mem.offset += 8;
+      operand_load(rdreg+1, ra, OP_ld, datatype, level, rmw, is_sse);
+      //std::cout<<"Yo Dude !!"<<endl;
+
+    } else {
+      /* Move */
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    
+      //MOCH
+      TransOp uoplo(OP_mov, rdreg+0, REG_zero, rareg+0, REG_zero, 3); uoplo.datatype = datatype; this << uoplo;
+      TransOp uophi(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = datatype; this << uophi;
+    }
+    break;
+  }
+#endif
   case 0x528: /* movapd load */
   case 0x310: /* movups load */
   case 0x510: /* movupd load */
@@ -959,12 +992,25 @@ bool TraceDecoder::decode_sse() {
         * Load
         * This is still idempotent since if the second one was unaligned, the first one must be too
         */
-      operand_load(rdreg+0, ra, OP_ld, datatype);
+      bool is_sse = true;
+      int level = 0;
+      bool rmw = false;
+
+      operand_load(rdreg+0, ra, OP_ld, datatype, level, rmw, is_sse);
       ra.mem.offset += 8;
-      operand_load(rdreg+1, ra, OP_ld, datatype);
+      operand_load(rdreg+1, ra, OP_ld, datatype, level, rmw, is_sse);
+      
+
+      /*operand_load(rdreg+0, ra, OP_ld, datatype);
+      ra.mem.offset += 8;
+      operand_load(rdreg+1, ra, OP_ld, datatype);*/
+      
+
     } else {
       /* Move */
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    
+      //MOCH
       TransOp uoplo(OP_mov, rdreg+0, REG_zero, rareg+0, REG_zero, 3); uoplo.datatype = datatype; this << uoplo;
       TransOp uophi(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = datatype; this << uophi;
     }
@@ -1003,6 +1049,8 @@ bool TraceDecoder::decode_sse() {
       if(!use_mmx) {
           TransOp uophi(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = datatype; this << uophi;
       }
+    
+      //std::cout<<"Yo Dude Store !!"<<endl;
     }
     break;
   };

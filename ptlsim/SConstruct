@@ -1,6 +1,7 @@
 # Top level SConstruct file for lib_mptlsim
 
 import os
+import subprocess
 import platform
 import subprocess
 import config_helper
@@ -27,6 +28,14 @@ env['CPPPATH'].append("%s/%s" % (qemu_dir, "target-i386"))
 env['CPPPATH'].append("%s/%s" % (qemu_dir, "fpu"))
 env['CPPPATH'].append("%s/%s" % (qemu_dir, "x86_64-softmmu"))
 
+#dramsim 
+dramsim_path= ARGUMENTS.get('dramsim', '%s/DRAMSim2' % (os.environ['HOME'] ))
+#this is probably not enough, should probably check to make sure there's an actual library there
+if os.path.isdir(dramsim_path):
+	env['CPPPATH'].append(dramsim_path);
+	env.Append(CCFLAGS = '-DDRAMSIM')
+
+
 optimization_defs = '-fno-trapping-math -fstack-protector -fno-exceptions '
 optimization_defs += '-fno-rtti -funroll-loops -fstrict-aliasing '
 
@@ -42,7 +51,10 @@ if int(debug):
     elif int(debug) == 2: #For more detailed debugging information
 		env.Append(CCFLAGS = '-ggdb3')
 		env.Append(CCFLAGS = '-g3')
-		env.Append(CCFLAGS = '-O0')
+		if float(GCC_MAJOR_MINOR_VERSION) >= 4.8:
+			env.Append(CCFLAGS = '-Og')
+		else: #Possibly slow
+			env.Append(CCFLAGS = '-O0')
 
     # Enable tests
     env.Append(CCFLAGS = '-DENABLE_TESTS')
@@ -62,6 +74,7 @@ else:
 # Include all the subdirectories into the CCFLAGS
 for dir in dirs:
     env['CPPPATH'].append(os.getcwd() + "/" + dir)
+
 
 num_sim_cores = ARGUMENTS.get('c', 1)
 env.Append(CCFLAGS = '-DNUM_SIM_CORES=%d' % int(num_sim_cores))

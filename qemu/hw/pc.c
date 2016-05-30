@@ -97,6 +97,9 @@ void isa_irq_handler(void *opaque, int n, int level)
 
     DPRINTF("isa_irqs: %s irq %d\n", level? "raise" : "lower", n);
     if (n < 16) {
+        if (n == 13) {
+            printf("Inside isa irq handler: %d\n", n);
+        }
         qemu_set_irq(isa->i8259[n], level);
     }
     if (isa->ioapic)

@@ -30,6 +30,7 @@
 
 #include <interconnect.h>
 #include <memoryStats.h>
+#include <mcpat.h>
 
 namespace Memory {
 
@@ -143,12 +144,13 @@ class BusInterconnect : public Interconnect
 		Signal broadcastCompleted_;
 		Signal dataBroadcastCompleted_;
         BusStats *new_stats;
+	W64 reads_user, reads_kernel, writes_user, writes_kernel;
 
         int latency_;
         int arbitrate_latency_;
 
 		BusQueueEntry *arbitrate_round_robin();
-		bool can_broadcast(BusControllerQueue *queue);
+		bool can_broadcast(BusControllerQueue *queue, MemoryRequest *request);
 
 	public:
 		BusInterconnect(const char *name, MemoryHierarchy *memoryHierarchy);
@@ -160,11 +162,15 @@ class BusInterconnect : public Interconnect
 		}
 		bool controller_request_cb(void *arg);
 		void register_controller(Controller *controller);
+    void hit_patch_count(Controller * controller, MemoryRequest *request);
 		int access_fast_path(Controller *controller,
 				MemoryRequest *request);
 		void annul_request(MemoryRequest *request);
         void set_data_bus();
+		void reset_lastcycle_stats();
 		void dump_configuration(YAML::Emitter &out) const;
+		void dump_mcpat_configuration(root_system *mcpatData, W32 idx);
+		void dump_mcpat_stats(root_system *mcpatData, W32 idx);
 
 		// Bus delay in sending message is BUS_BROADCASTS_DELAY
 		int get_delay() {
@@ -196,6 +202,15 @@ class BusInterconnect : public Interconnect
 		bool broadcast_completed_cb(void *arg);
 		bool data_broadcast_cb(void *arg);
 		bool data_broadcast_completed_cb(void *arg);
+
+		bool is_empty() const {
+			foreach (i, controllers.count()) {
+				if (controllers[i]->queue.count() > 0 ||
+						controllers[i]->dataQueue.count() > 0)
+					return false;
+			}
+			return true;
+		}
 };
 
 static inline ostream& operator <<(ostream& os,

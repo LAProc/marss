@@ -12,6 +12,7 @@
 #define MACHINE_H
 
 #include <ptlsim.h>
+#include <mcpat.h>
 
 #define YAML_KEY_VAL(out, key, val) \
 	out << YAML::Key << key << YAML::Value << val;
@@ -20,6 +21,7 @@
 
 namespace Core {
     struct BaseCore;
+    struct Accelerator;
 };
 
 namespace Memory {
@@ -43,8 +45,14 @@ struct ConnectionDef {
     dynarray<SingleConnection*> connections;
 };
 
+struct data {
+	double power;
+	double voltage;
+};
+
 struct BaseMachine: public PTLsimMachine {
     dynarray<Core::BaseCore*> cores;
+    dynarray<Core::Accelerator*> accelerators;
     dynarray<Memory::Controller*> controllers;
     dynarray<Memory::Interconnect*> interconnects;
     dynarray<ConnectionDef*> connections;
@@ -57,6 +65,10 @@ struct BaseMachine: public PTLsimMachine {
 
     Memory::MemoryHierarchy* memoryHierarchyPtr;
 
+    root_system mcpatData;
+    virtual void dumpTraces();
+    virtual void compute_power();
+
     BaseMachine(const char* name);
     virtual bool init(PTLsimConfig& config);
     virtual int run(PTLsimConfig& config);
@@ -67,9 +79,14 @@ struct BaseMachine: public PTLsimMachine {
     virtual void flush_tlb_virt(Context& ctx, Waddr virtaddr);
     void flush_all_pipelines();
     virtual void reset();
-	virtual void dump_configuration(ostream& os) const;
-	virtual void shutdown();
+//    virtual void reset_lastcycle_stats();
+    virtual void dump_configuration(ostream& os) const;
+    virtual void dump_mcpat_configuration();
+    virtual void dump_machine_area();
+    virtual void dump_machine_tdp();
+    virtual void shutdown();
     virtual ~BaseMachine();
+    void simulation_done(); 
 
     bitvec<NUM_SIM_CORES> context_used;
     W8 context_counter;
@@ -77,7 +94,7 @@ struct BaseMachine: public PTLsimMachine {
 
     Context& get_next_context();
     W8 get_next_coreid();
-	void config_changed();
+    void config_changed();
 
     // Interconnect related support functions
     ConnectionDef* get_new_connection_def(const char* interconnect,

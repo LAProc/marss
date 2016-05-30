@@ -83,6 +83,23 @@ extern uint8_t inside_ptlsim;
  */
 extern uint8_t qemu_initialized;
 
+/**
+ * lap control register
+ * Flag indicate whether LAP should be started
+ */
+extern uint64_t lap_mmio_reg;
+
+/**
+ * lap buf addr
+ * Flag indicate where LAP data locates
+ */
+extern uint64_t lap_buf_addr;
+
+/**
+ * lap interrupt to sent when LAP operation finishes.
+ */
+extern void lap_finish();
+
 /*
  * ptlsim_init
  * returns void

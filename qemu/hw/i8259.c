@@ -238,12 +238,12 @@ int pic_read_irq(PicState2 *s)
                 /* spurious IRQ on slave controller */
                 irq2 = 7;
             }
-            intno = s->pics[1].irq_base + irq2;
+            intno = s->pics[1].irq_base + irq2; // irq_base = 112;
 #if defined(DEBUG_PIC) || defined(DEBUG_IRQ_LATENCY)
             irq = irq2 + 8;
 #endif
         } else {
-            intno = s->pics[0].irq_base + irq;
+            intno = s->pics[0].irq_base + irq; // irq_base = 8;
         }
     } else {
         /* spurious IRQ on host controller */
@@ -259,6 +259,9 @@ int pic_read_irq(PicState2 *s)
                     irq_time[irq]) * 1000000.0 / get_ticks_per_sec());
 #endif
     DPRINTF("pic_interrupt: irq=%d\n", irq);
+    //printf("irq_base 0 = %d, irq_base 1 = %d\n", s->pics[0].irq_base, s->pics[1].irq_base);
+    if (irq == 13)
+        printf("QEMU DEBUG pic_interrupt: irq=%d\n", irq);
     return intno;
 }
 

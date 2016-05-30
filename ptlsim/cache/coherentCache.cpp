@@ -55,6 +55,9 @@ CacheController::CacheController(W8 coreid, const char *name,
     memoryHierarchy_->add_cache_mem_controller(this);
     new_stats = new MESIStats(name, &memoryHierarchy->get_machine());
 
+    readaccesses = 0, readmisses = 0, conflicts = 0;
+    writeaccesses = 0, writemisses = 0;
+
     cacheLines_ = get_cachelines(type);
 
     if(!memoryHierarchy_->get_machine().get_option(name, "last_private", isLowestPrivate_)) {
@@ -88,6 +91,10 @@ CacheController::CacheController(W8 coreid, const char *name,
     upperInterconnect_  = NULL;
     upperInterconnect2_ = NULL;
     lowerInterconnect_  = NULL;
+
+    new_stats->cpurequest.count.miss.write.enable_periodic_dump();
+    new_stats->cpurequest.count.miss.read.enable_periodic_dump();
+
 }
 
 CacheController::~CacheController()
@@ -405,6 +412,7 @@ bool CacheController::handle_interconnect_cb(void *arg)
     Interconnect *sender = (Interconnect*)msg->sender;
 
     memdebug("Message received is: " << *msg);
+    //printf("Inside coherence cache cb!\n");
 
     if(sender == upperInterconnect_ || sender == upperInterconnect2_) {
         return handle_upper_interconnect(*msg);
@@ -427,6 +435,9 @@ int CacheController::access_fast_path(Interconnect *interconnect,
 
     if (request->get_type() != MEMORY_OP_WRITE)
         line = cacheLines_->probe(request);
+
+    //if (request->get_coreid() == 1)
+    //    printf("access fast path: line = %p\n", line);
 
     /*
      * if its a write, dont do fast access as the lower
@@ -519,6 +530,14 @@ void CacheController::register_second_upper_interconnect(Interconnect
 void CacheController::register_lower_interconnect(Interconnect *interconnect)
 {
     lowerInterconnect_ = interconnect;
+}
+
+bool CacheController::check_cache_states_bit(W8 value1, W8 value2){
+    return cacheLines_->check_lines_states_tsx(value1 , value2);
+}
+
+void CacheController::reset_cache_states_bit(W8 value){
+    cacheLines_->reset_lines_states(value);
 }
 
 bool CacheController::cache_hit_cb(void *arg)
@@ -641,6 +660,9 @@ bool CacheController::cache_access_cb(void *arg)
 
         if(line) hit = true;
         else hit = false;
+
+        //if (queueEntry->request->get_coreid() == 1)
+        //    printf("Inside coherent cache %s hit = %d\n", get_name(), hit);
 
         // Testing 100 % L2 Hit
         // if(type_ == L2_CACHE)
@@ -888,4 +910,370 @@ void CacheController::dump_configuration(YAML::Emitter &out) const
 	coherence_logic_->dump_configuration(out);
 
 	out << YAML::EndMap;
+}
+
+void CacheController::dump_mcpat_configuration(root_system *mcpat, W32 core)
+{
+        if (( strstr(get_name(), "L1_I") !=NULL) || ( strstr(get_name(), "L1_I_A") !=NULL) ) {
+                mcpat->core[idx].icache.icache_config[0] = cacheLines_->get_size();
+                mcpat->core[idx].icache.icache_config[1] = cacheLines_->get_line_size();
+                mcpat->core[idx].icache.icache_config[2] = cacheLines_->get_way_count();
+                mcpat->core[idx].icache.icache_config[3] = 1;
+                mcpat->core[idx].icache.icache_config[4] = 8;
+                mcpat->core[idx].icache.icache_config[5] = cacheLines_->get_access_latency();
+                mcpat->core[idx].icache.icache_config[6] = 1;
+/* The below values need verification */
+                mcpat->core[idx].icache.buffer_sizes[0] = 16;
+                mcpat->core[idx].icache.buffer_sizes[1] = 16;
+                mcpat->core[idx].icache.buffer_sizes[2] = pendingRequests_.size();
+                mcpat->core[idx].icache.buffer_sizes[3] = 0;
+        }
+
+        if (( strstr(get_name(), "L1_D") !=NULL) || ( strstr(get_name(), "L1_D_A") !=NULL) ) {
+                mcpat->core[idx].dcache.dcache_config[0] = cacheLines_->get_size();
+                mcpat->core[idx].dcache.dcache_config[1] = cacheLines_->get_line_size();
+                mcpat->core[idx].dcache.dcache_config[2] = cacheLines_->get_way_count();
+                mcpat->core[idx].dcache.dcache_config[3] = 1;
+                mcpat->core[idx].dcache.dcache_config[4] = 3;
+                mcpat->core[idx].dcache.dcache_config[5] = cacheLines_->get_access_latency();
+                mcpat->core[idx].dcache.dcache_config[6] = 1;
+                mcpat->core[idx].dcache.buffer_sizes[0] = 16;
+                mcpat->core[idx].dcache.buffer_sizes[1] = 16;
+                mcpat->core[idx].dcache.buffer_sizes[2] = pendingRequests_.size();
+                mcpat->core[idx].dcache.buffer_sizes[3] = 16;
+        }
+        if (( strstr(get_name(), "L2") !=NULL) ) {
+                int count = core;
+                mcpat->L2[count].L2_config[0] = cacheLines_->get_size();
+                mcpat->L2[count].L2_config[1] = cacheLines_->get_line_size();
+                mcpat->L2[count].L2_config[2] = cacheLines_->get_way_count();
+                mcpat->L2[count].L2_config[3] = 1;
+                mcpat->L2[count].L2_config[4] = 3;
+                mcpat->L2[count].L2_config[5] = cacheLines_->get_access_latency();
+                mcpat->L2[count].L2_config[6] = 1;
+                mcpat->L2[count].buffer_sizes[0] = 16;
+                mcpat->L2[count].buffer_sizes[1] = 16;
+                mcpat->L2[count].buffer_sizes[2] = pendingRequests_.size();
+                mcpat->L2[count].buffer_sizes[3] = 16;
+                mcpat->L2[count].duty_cycle = 1;
+        }
+}
+
+void CacheController::reset_lastcycle_stats()
+{
+        new_stats->cpurequest.count.miss.read(user_stats) = readmiss_user;
+	new_stats->cpurequest.count.miss.read(kernel_stats) = readmiss_kernel;
+	new_stats->cpurequest.count.hit.read.hit(user_stats) = readhit_user;
+	new_stats->cpurequest.count.hit.read.hit(kernel_stats) = readhit_kernel;
+	new_stats->cpurequest.count.hit.read.forward(user_stats) = readhit_forward_user;
+	new_stats->cpurequest.count.hit.read.forward(kernel_stats) = readhit_forward_kernel;
+        new_stats->cpurequest.count.miss.write(user_stats) = writemiss_user;
+	new_stats->cpurequest.count.miss.write(kernel_stats) = writemiss_kernel;
+	new_stats->cpurequest.count.hit.write.hit(user_stats) = writehit_user;
+	new_stats->cpurequest.count.hit.write.hit(kernel_stats) = writehit_kernel;
+	new_stats->cpurequest.count.hit.write.forward(user_stats) = writehit_forward_user;
+	new_stats->cpurequest.count.hit.write.forward(kernel_stats) = writehit_forward_kernel;
+	new_stats->cpurequest.stall.read.dependency(user_stats) = stall_rdepend_user;
+	new_stats->cpurequest.stall.read.dependency(kernel_stats) = stall_rdepend_kernel;
+	new_stats->cpurequest.stall.read.cache_port(user_stats) = stall_rcachep_user;
+	new_stats->cpurequest.stall.read.cache_port(kernel_stats) = stall_rcachep_kernel;
+	new_stats->cpurequest.stall.write.dependency(user_stats) = stall_wdepend_user;
+	new_stats->cpurequest.stall.write.dependency(kernel_stats) = stall_wdepend_kernel;
+	new_stats->cpurequest.stall.write.cache_port(user_stats) = stall_wcachep_user;
+	new_stats->cpurequest.stall.write.cache_port(kernel_stats) = stall_wcachep_kernel;
+	new_stats->cpurequest.stall.read.buffer_full(user_stats) = stall_rbufferfull_user;
+	new_stats->cpurequest.stall.read.buffer_full(kernel_stats) = stall_rbufferfull_kernel;
+	new_stats->cpurequest.stall.write.buffer_full(user_stats) = stall_wbufferfull_user;
+	new_stats->cpurequest.stall.write.buffer_full(kernel_stats) = stall_wbufferfull_kernel;
+}
+
+void CacheController::dump_mcpat_stats(root_system *mcpat, W32 coreid)
+{
+	system_core *core = &(mcpat->core[idx]);
+
+        W64 rmiss_user = (new_stats->cpurequest.count.miss.read)(user_stats) - 0;
+        W64 rmiss_kernel = (new_stats->cpurequest.count.miss.read)(kernel_stats) - 0;
+        W64 rhit_user = (new_stats->cpurequest.count.hit.read.hit)(user_stats) - 0;
+        W64 rhit_kernel = (new_stats->cpurequest.count.hit.read.hit)(kernel_stats) - 0;
+	W64 rhit_forward_user = (new_stats->cpurequest.count.hit.read.forward)(user_stats) - 0;
+	W64 rhit_forward_kernel = (new_stats->cpurequest.count.hit.read.forward)(kernel_stats) - 0;
+        W64 wmiss_user = (new_stats->cpurequest.count.miss.write)(user_stats) - 0;
+        W64 wmiss_kernel = (new_stats->cpurequest.count.miss.write)(kernel_stats) - 0;
+        W64 whit_user = (new_stats->cpurequest.count.hit.write.hit)(user_stats) - 0;
+        W64 whit_kernel = (new_stats->cpurequest.count.hit.write.hit)(kernel_stats) - 0;
+	W64 whit_forward_user = (new_stats->cpurequest.count.hit.write.forward)(user_stats) - 0;
+	W64 whit_forward_kernel = (new_stats->cpurequest.count.hit.write.forward)(kernel_stats) - 0;
+        W64 rdepend_user = new_stats->cpurequest.stall.read.dependency(user_stats) - 0;
+        W64 rdepend_kernel = new_stats->cpurequest.stall.read.dependency(kernel_stats) - 0;
+        W64 rcachep_user = new_stats->cpurequest.stall.read.cache_port(user_stats) - 0;
+        W64 rcachep_kernel = new_stats->cpurequest.stall.read.cache_port(kernel_stats) - 0;
+        W64 wdepend_user = new_stats->cpurequest.stall.write.dependency(user_stats) - 0;
+        W64 wdepend_kernel = new_stats->cpurequest.stall.write.dependency(kernel_stats) - 0;
+        W64 wcachep_user = new_stats->cpurequest.stall.write.cache_port(user_stats) - 0;
+        W64 wcachep_kernel = new_stats->cpurequest.stall.write.cache_port(kernel_stats) - 0;
+        W64 rbufferfull_user = new_stats->cpurequest.stall.read.buffer_full(user_stats) - 0;
+        W64 rbufferfull_kernel = new_stats->cpurequest.stall.read.buffer_full(kernel_stats) - 0;
+        W64 wbufferfull_user = new_stats->cpurequest.stall.write.buffer_full(user_stats) - 0;
+        W64 wbufferfull_kernel = new_stats->cpurequest.stall.write.buffer_full(kernel_stats) - 0;
+
+        if ( (strstr(get_name(), "L1_I") !=NULL) || ( strstr(get_name(), "L1_I_A") !=NULL)) {
+                core->icache.read_accesses = (rmiss_user + rmiss_kernel + rhit_user + rhit_kernel + rhit_forward_user +
+						rhit_forward_kernel) - (readmiss_user + readmiss_kernel + readhit_user + 
+						readhit_kernel + readhit_forward_user + readhit_forward_kernel);
+		core->icache.read_misses = (rmiss_user + rmiss_kernel) - (readmiss_user + readmiss_kernel);
+		core->icache.conflicts = (rdepend_user + rdepend_kernel + rcachep_user + rcachep_kernel + 
+				wdepend_user + wdepend_kernel + wcachep_user + wcachep_kernel +
+				rbufferfull_user + rbufferfull_kernel + wbufferfull_user + wbufferfull_kernel)
+				- (stall_rdepend_user + stall_rdepend_kernel + stall_rcachep_user + stall_rcachep_kernel + 
+				stall_wdepend_user + stall_wdepend_kernel + stall_wcachep_user + stall_wcachep_kernel +
+				stall_rbufferfull_user + stall_rbufferfull_kernel + stall_wbufferfull_user + stall_wbufferfull_kernel);
+	}
+        if ( (strstr(get_name(), "L1_D") !=NULL) || ( strstr(get_name(), "L1_D_A") !=NULL)) {
+                core->dcache.read_accesses = (rmiss_user + rmiss_kernel + rhit_user + rhit_kernel + rhit_forward_user +
+						rhit_forward_kernel) - (readmiss_user + readmiss_kernel + readhit_user +
+						readhit_kernel + readhit_forward_user + readhit_forward_kernel);
+		core->dcache.read_misses = (rmiss_user + rmiss_kernel) - (readmiss_user + readmiss_kernel);
+                core->dcache.write_accesses = (wmiss_user + wmiss_kernel + whit_user + whit_kernel + whit_forward_user +
+						whit_forward_kernel) - (writemiss_user + writemiss_kernel + writehit_user +
+						writehit_kernel + writehit_forward_user + writehit_forward_kernel);
+		core->dcache.write_misses = (wmiss_user + wmiss_kernel) - (writemiss_user + writemiss_kernel);
+		core->dcache.conflicts = (rdepend_user + rdepend_kernel + rcachep_user + rcachep_kernel + 
+				wdepend_user + wdepend_kernel + wcachep_user + wcachep_kernel +
+				rbufferfull_user + rbufferfull_kernel + wbufferfull_user + wbufferfull_kernel)
+				- (stall_rdepend_user + stall_rdepend_kernel + stall_rcachep_user + stall_rcachep_kernel + 
+				stall_wdepend_user + stall_wdepend_kernel + stall_wcachep_user + stall_wcachep_kernel +
+				stall_rbufferfull_user + stall_rbufferfull_kernel + stall_wbufferfull_user + stall_wbufferfull_kernel);
+        }
+	if ( strstr(get_name(), "L2") !=NULL) {
+                W32 count = coreid;
+                mcpat->L2[count].read_accesses = (rmiss_user + rmiss_kernel + rhit_user + rhit_kernel + rhit_forward_user +
+						rhit_forward_kernel) - (readmiss_user + readmiss_kernel + readhit_user +
+						 readhit_kernel + readhit_forward_user + readhit_forward_kernel);
+		mcpat->L2[count].read_misses = (rmiss_user + rmiss_kernel) - (readmiss_user + readmiss_kernel);
+                mcpat->L2[count].write_accesses = (wmiss_user + wmiss_kernel + whit_user + whit_kernel + whit_forward_user +
+						whit_forward_kernel) - (writemiss_user + writemiss_kernel + writehit_user +
+						writehit_kernel + writehit_forward_user + writehit_forward_kernel);
+		mcpat->L2[count].write_misses = (wmiss_user + wmiss_kernel) - (writemiss_user + writemiss_kernel);
+
+		mcpat->L2[count].conflicts = (rdepend_user + rdepend_kernel + rcachep_user + rcachep_kernel + 
+				wdepend_user + wdepend_kernel + wcachep_user + wcachep_kernel +
+				rbufferfull_user + rbufferfull_kernel + wbufferfull_user + wbufferfull_kernel)
+				- (stall_rdepend_user + stall_rdepend_kernel + stall_rcachep_user + stall_rcachep_kernel + 
+				stall_wdepend_user + stall_wdepend_kernel + stall_wcachep_user + stall_wcachep_kernel +
+				stall_rbufferfull_user + stall_rbufferfull_kernel + stall_wbufferfull_user + stall_wbufferfull_kernel);
+        }
+	if ( strstr(get_name(), "L3") !=NULL) {
+                W32 count = coreid;
+                mcpat->L3[count].read_accesses = (rmiss_user + rmiss_kernel + rhit_user + rhit_kernel + rhit_forward_user +
+						rhit_forward_kernel) - (readmiss_user + readmiss_kernel + readhit_user +
+						 readhit_kernel + readhit_forward_user + readhit_forward_kernel);
+		mcpat->L3[count].read_misses = (rmiss_user + rmiss_kernel) - (readmiss_user + readmiss_kernel);
+                mcpat->L3[count].write_accesses = (wmiss_user + wmiss_kernel + whit_user + whit_kernel + whit_forward_user +
+						whit_forward_kernel) - (writemiss_user + writemiss_kernel + writehit_user +
+						writehit_kernel + writehit_forward_user + writehit_forward_kernel);
+                mcpat->L3[count].write_accesses = (wmiss_user + wmiss_kernel + whit_user + whit_kernel) - (writemiss_user + 
+						writemiss_kernel + writehit_user + writehit_kernel);
+		mcpat->L3[count].write_misses = (wmiss_user + wmiss_kernel) - (writemiss_user + writemiss_kernel);
+
+		mcpat->L3[count].conflicts = (rdepend_user + rdepend_kernel + rcachep_user + rcachep_kernel + 
+				wdepend_user + wdepend_kernel + wcachep_user + wcachep_kernel +
+				rbufferfull_user + rbufferfull_kernel + wbufferfull_user + wbufferfull_kernel)
+				- (stall_rdepend_user + stall_rdepend_kernel + stall_rcachep_user + stall_rcachep_kernel + 
+				stall_wdepend_user + stall_wdepend_kernel + stall_wcachep_user + stall_wcachep_kernel +
+				stall_rbufferfull_user + stall_rbufferfull_kernel + stall_wbufferfull_user + stall_wbufferfull_kernel);
+	}
+        readmiss_user = rmiss_user;
+	readmiss_kernel = rmiss_kernel;
+	readhit_user = rhit_user;
+	readhit_kernel = rhit_kernel;
+	readhit_forward_user = rhit_forward_user;
+	readhit_forward_kernel = rhit_forward_kernel;
+        writemiss_user = wmiss_user;
+	writemiss_kernel = wmiss_kernel;
+	writehit_user = whit_user;
+	writehit_kernel = whit_kernel;
+	writehit_forward_user = whit_forward_user;
+	writehit_forward_kernel = whit_forward_kernel;
+	stall_rdepend_user = rdepend_user;
+	stall_rdepend_kernel = rdepend_kernel;
+	stall_rcachep_user = rcachep_user;
+	stall_rcachep_kernel = rcachep_kernel;
+	stall_wdepend_user = wdepend_user;
+	stall_wdepend_kernel = wdepend_kernel;
+	stall_wcachep_user = wcachep_user;
+	stall_wcachep_kernel = wcachep_kernel;
+	stall_rbufferfull_user = rbufferfull_user;
+	stall_rbufferfull_kernel = rbufferfull_kernel;
+	stall_wbufferfull_user = wbufferfull_user;
+	stall_wbufferfull_kernel = wbufferfull_kernel;
+#if 0
+        system_core *core = &(mcpat->core[idx]);
+	W64 readacc = 0, readmiss = 0, cflicts = 0;
+	W64 writeacc = 0, writemiss = 0;
+
+        if ( (strstr(get_name(), "L1_I") !=NULL) || (strstr(get_name(), "L1_I_A") !=NULL)) {
+               	readacc = (new_stats->cpurequest.count.miss.read)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.hit)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(user_stats);
+                readacc = (new_stats->cpurequest.count.miss.read)(kernel_stats) +
+                          ((new_stats->cpurequest.count.hit.read.hit)(kernel_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(kernel_stats)) + readacc;
+                core->icache.read_accesses = readacc - readaccesses;
+			readaccesses = readacc;
+
+		readmiss = (new_stats->cpurequest.count.miss.read)(user_stats) +
+			   (new_stats->cpurequest.count.miss.read)(kernel_stats);
+		core->icache.read_misses = readmiss - readmisses;
+		readmisses = readmiss;
+
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(user_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(user_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(user_stats) +
+                              (new_stats->cpurequest.stall.write.cache_port)(user_stats));
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(user_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(user_stats)) + cflicts;
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(kernel_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.cache_port)(kernel_stats)) + cflicts;
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(kernel_stats)) + cflicts;
+                core->icache.conflicts = cflicts - conflicts;
+                conflicts = cflicts;
+	}
+        if ( (strstr(get_name(), "L1_D") !=NULL) || (strstr(get_name(), "L1_D_A") !=NULL)) {
+               	readacc = (new_stats->cpurequest.count.miss.read)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.hit)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(user_stats);
+                readacc = (new_stats->cpurequest.count.miss.read)(kernel_stats) +
+                          ((new_stats->cpurequest.count.hit.read.hit)(kernel_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(kernel_stats)) + readacc;
+                core->dcache.read_accesses = readacc - readaccesses;
+		readaccesses = readacc;
+
+		readmiss = (new_stats->cpurequest.count.miss.read)(user_stats) +
+			   (new_stats->cpurequest.count.miss.read)(kernel_stats);
+		core->dcache.read_misses = readmiss - readmisses;
+		readmisses = readmiss;
+
+                writeacc = (new_stats->cpurequest.count.miss.write)(user_stats) +
+			   ((new_stats->cpurequest.count.hit.write.hit)(user_stats) +
+                           (new_stats->cpurequest.count.hit.write.forward)(user_stats));
+                writeacc = (new_stats->cpurequest.count.miss.write)(kernel_stats) +
+			   ((new_stats->cpurequest.count.hit.write.hit)(kernel_stats) +
+                           (new_stats->cpurequest.count.hit.write.forward)(kernel_stats)) + writeacc;
+		core->dcache.write_accesses = writeacc - writeaccesses;
+		writeaccesses = writeacc;
+
+                writemiss = (new_stats->cpurequest.count.miss.write)(user_stats) +
+			    (new_stats->cpurequest.count.miss.write)(kernel_stats);
+                core->dcache.write_misses = writemiss - writemisses;
+		writemisses = writemiss;
+
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(user_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(user_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(user_stats) +
+                              (new_stats->cpurequest.stall.write.cache_port)(user_stats));
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(user_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(user_stats)) + cflicts;
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(kernel_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.cache_port)(kernel_stats)) + cflicts;
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(kernel_stats)) + cflicts;
+                core->dcache.conflicts = cflicts - conflicts;
+                conflicts = cflicts;
+        }
+	if ( strstr(get_name(), "L2") !=NULL) {
+                W32 count = coreid;
+               	readacc = (new_stats->cpurequest.count.miss.read)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.hit)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(user_stats);
+                readacc = (new_stats->cpurequest.count.miss.read)(kernel_stats) +
+                          ((new_stats->cpurequest.count.hit.read.hit)(kernel_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(kernel_stats)) + readacc;
+                mcpat->L2[count].read_accesses = readacc - readaccesses;
+		readaccesses = readacc;
+
+		readmiss = (new_stats->cpurequest.count.miss.read)(user_stats) +
+			   (new_stats->cpurequest.count.miss.read)(kernel_stats);
+		mcpat->L2[count].read_misses = readmiss - readmisses;
+		readmisses = readmiss;
+
+                writeacc = (new_stats->cpurequest.count.miss.write)(user_stats) +
+			   ((new_stats->cpurequest.count.hit.write.hit)(user_stats) +
+                           (new_stats->cpurequest.count.hit.write.forward)(user_stats));
+                writeacc = (new_stats->cpurequest.count.miss.write)(kernel_stats) +
+			   ((new_stats->cpurequest.count.hit.write.hit)(kernel_stats) +
+                           (new_stats->cpurequest.count.hit.write.forward)(kernel_stats)) + writeacc;
+		mcpat->L2[count].write_accesses = writeacc - writeaccesses;
+		writeaccesses = writeacc;
+
+                writemiss = (new_stats->cpurequest.count.miss.write)(user_stats) +
+			    (new_stats->cpurequest.count.miss.write)(kernel_stats);
+                mcpat->L2[count].write_misses = writemiss - writemisses;
+		writemisses = writemiss;
+
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(user_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(user_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(user_stats) +
+                              (new_stats->cpurequest.stall.write.cache_port)(user_stats));
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(user_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(user_stats)) + cflicts;
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(kernel_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.cache_port)(kernel_stats)) + cflicts;
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(kernel_stats)) + cflicts;
+                mcpat->L2[count].conflicts = cflicts - conflicts;
+                conflicts = cflicts;
+        }
+	if ( strstr(get_name(), "L3") !=NULL) {
+                W32 count = coreid;
+               	readacc = (new_stats->cpurequest.count.miss.read)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.hit)(user_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(user_stats);
+                readacc = (new_stats->cpurequest.count.miss.read)(kernel_stats) +
+                          ((new_stats->cpurequest.count.hit.read.hit)(kernel_stats) +
+                          (new_stats->cpurequest.count.hit.read.forward)(kernel_stats)) + readacc;
+                mcpat->L3[count].read_accesses = readacc - readaccesses;
+		readaccesses = readacc;
+
+		readmiss = (new_stats->cpurequest.count.miss.read)(user_stats) +
+			   (new_stats->cpurequest.count.miss.read)(kernel_stats);
+		mcpat->L3[count].read_misses = readmiss - readmisses;
+		readmisses = readmiss;
+
+                writeacc = (new_stats->cpurequest.count.miss.write)(user_stats) +
+			   ((new_stats->cpurequest.count.hit.write.hit)(user_stats) +
+                           (new_stats->cpurequest.count.hit.write.forward)(user_stats));
+                writeacc = (new_stats->cpurequest.count.miss.write)(kernel_stats) +
+			   ((new_stats->cpurequest.count.hit.write.hit)(kernel_stats) +
+                           (new_stats->cpurequest.count.hit.write.forward)(kernel_stats)) + writeacc;
+		mcpat->L3[count].write_accesses = writeacc - writeaccesses;
+		writeaccesses = writeacc;
+
+                writemiss = (new_stats->cpurequest.count.miss.write)(user_stats) +
+			    (new_stats->cpurequest.count.miss.write)(kernel_stats);
+                mcpat->L3[count].write_misses = writemiss - writemisses;
+		writemisses = writemiss;
+
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(user_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(user_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(user_stats) +
+                              (new_stats->cpurequest.stall.write.cache_port)(user_stats));
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(user_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(user_stats)) + cflicts;
+                cflicts = ((new_stats->cpurequest.stall.read.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.read.cache_port)(kernel_stats)) +
+                             ((new_stats->cpurequest.stall.write.dependency)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.cache_port)(kernel_stats)) + cflicts;
+		cflicts = ((new_stats->cpurequest.stall.read.buffer_full)(kernel_stats) +
+                             (new_stats->cpurequest.stall.write.buffer_full)(kernel_stats)) + cflicts;
+                mcpat->L3[count].conflicts = cflicts - conflicts;
+                conflicts = cflicts;
+	}
+#endif
 }

@@ -736,6 +736,8 @@ void Context::update_mode_count() {
 }
 
 void Context::update_mode(bool is_kernel) {
+    if (kernel_mode != is_kernel)
+	switches++;
     kernel_mode = is_kernel;
     if(config.log_user_only) {
         if(kernel_mode)
@@ -1050,7 +1052,10 @@ W64 Context::loadphys(Waddr addr, bool internal, int sizeshift) {
     Waddr orig_addr = addr;
     addr = floor(addr, 8);
     setup_qemu_switch_all_ctx(*this);
+
+    printf("before ldq raw.\n");
     data = ldq_raw((uint8_t*)addr);
+    printf("after ldq raw.\n");
 
     if(logable(10))
         ptl_logfile << "Context::loadphys addr[", hexstring(addr, 64),

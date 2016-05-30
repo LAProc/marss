@@ -16,6 +16,7 @@
 #include <machine.h>
 #include <statsBuilder.h>
 #include <memoryHierarchy.h>
+#include <mcpat.h>
 
 namespace Core {
 
@@ -33,7 +34,10 @@ namespace Core {
             virtual void dump_state(ostream& os) = 0;
             virtual void update_stats() = 0;
             virtual void flush_pipeline() = 0;
-		    virtual void dump_configuration(YAML::Emitter &out) const = 0;
+	    virtual void reset_lastcycle_stats() = 0;
+            virtual void dump_configuration(YAML::Emitter &out) const = 0;
+            virtual void dump_mcpat_configuration(system_core *mcpatCore) = 0;
+            virtual void dump_mcpat_stats(root_system *mcpatData, W32 core) = 0;
 
             void update_memory_hierarchy_ptr();
 

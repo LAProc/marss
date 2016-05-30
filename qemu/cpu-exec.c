@@ -350,6 +350,11 @@ int sim_cpu_exec(void)
 							intno = cpu_get_pic_interrupt(env);
 							qemu_log_mask(CPU_LOG_TB_IN_ASM, "Servicing hardware INT=0x%02x\n", intno);
 							do_interrupt(intno, 0, 0, 0, 1);
+                            //if (intno == 61) {
+                                printf("INSIDE CPU_EXEC: caught interrupt %d\n", intno);
+                                printf("interrupt_handler ip: %x\n", env->eip);
+                            //}
+                            
 							/* ensure that no TB jump will be modified as
 							   the program flow was changed */
 #if !defined(CONFIG_USER_ONLY)
@@ -589,6 +594,11 @@ int cpu_exec(CPUState *env1)
                             do_interrupt(intno, 0, 0, 0, 1);
                             /* ensure that no TB jump will be modified as
                                the program flow was changed */
+                            if (intno == 61) {
+                                printf("INSIDE CPU_EXEC: caught interrupt %d\n", intno);
+                                printf("interrupt_handler ip: %x\n", env->eip);
+                            }
+                            
                             next_tb = 0;
 #if !defined(CONFIG_USER_ONLY)
                         } else if ((interrupt_request & CPU_INTERRUPT_VIRQ) &&

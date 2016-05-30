@@ -37,6 +37,8 @@
 #include <statsBuilder.h>
 #include <cacheLines.h>
 
+#include <mcpat.h>
+
 namespace Memory {
 
     namespace CoherentCache {
@@ -202,6 +204,13 @@ namespace Memory {
 
                 // Stats Objects
                 MESIStats *new_stats;
+		W64 readaccesses, readmisses, conflicts, writeaccesses, writemisses;
+	W64 readmiss_user, readmiss_kernel, readhit_user, readhit_kernel, writemiss_user, writemiss_kernel;
+	W64 readhit_forward_user, readhit_forward_kernel;
+	W64 writehit_forward_user, writehit_forward_kernel;
+        W64 writehit_user, writehit_kernel, stall_rdepend_user, stall_rdepend_kernel, stall_rcachep_user, stall_rcachep_kernel;
+        W64 stall_wdepend_user, stall_wdepend_kernel, stall_wcachep_user, stall_wcachep_kernel;
+        W64 stall_rbufferfull_user, stall_rbufferfull_kernel, stall_wbufferfull_user, stall_wbufferfull_kernel;
 
                 CoherenceLogic *coherence_logic_;
 
@@ -215,7 +224,6 @@ namespace Memory {
                     return request->get_physical_address() >> cacheLineBits_;
                 }
 
-                bool handle_upper_interconnect(Message &message);
 
                 bool handle_lower_interconnect(Message &message);
 
@@ -230,6 +238,7 @@ namespace Memory {
                 void get_directory(Interconnect *interconn);
 
             public:
+                virtual bool handle_upper_interconnect(Message &message);
                 CacheController(W8 coreid, const char *name,
                         MemoryHierarchy *memoryHierarchy, CacheType type);
                 ~CacheController();
@@ -254,7 +263,7 @@ namespace Memory {
 
                 void print(ostream& os) const;
 
-                bool is_full(bool fromInterconnect = false) const {
+                bool is_full(bool fromInterconnect = false, MemoryRequest *request = NULL) const {
                     if(fromInterconnect) {
                         // We keep some free entries for interconnect
                         // so if the queue is 100% full then only
@@ -272,8 +281,15 @@ namespace Memory {
                     return false;
                 }
 
+                bool is_empty() const {
+                    return (pendingRequests_.count() == 0);
+                }
+
                 void annul_request(MemoryRequest *request);
-				void dump_configuration(YAML::Emitter &out) const;
+		void reset_lastcycle_stats();
+		void dump_configuration(YAML::Emitter &out) const;
+		void dump_mcpat_configuration(root_system *mcpat, W32 core);
+		void dump_mcpat_stats(root_system *mcpat, W32 core);
 
                 // Callback functions for signals of cache
                 virtual bool cache_hit_cb(void *arg);
@@ -303,7 +319,8 @@ namespace Memory {
                 Controller* get_directory() { return directory_; }
 				Controller* get_lower_cont() { return lowerCont_; }
                 CacheQueueEntry* get_new_queue_entry();
-
+                void reset_cache_states_bit(W8 value);
+                bool check_cache_states_bit(W8 value1, W8 value2) ;
         };
 
     };

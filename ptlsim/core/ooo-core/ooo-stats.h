@@ -176,6 +176,8 @@ namespace OOO_CORE_MODEL {
                 StatObj<W64> branch_mispredict;
                 StatObj<W64> exception;
                 StatObj<W64> complete;
+                StatObj<W64> ialu_accesses;
+                StatObj<W64> fpu_accesses;
 
                 result(Statable *parent)
                     : Statable("result", parent)
@@ -186,18 +188,60 @@ namespace OOO_CORE_MODEL {
                       , branch_mispredict("branch_mispredict", this)
                       , exception("exception", this)
                       , complete("complete", this)
+                      , ialu_accesses("ialu_accesses", this)
+                      , fpu_accesses("fpu_accesses", this)
                 {}
             } result;
 
             StatObj<W64> uops;
             StatEquation<W64, double, StatObjFormulaDiv> uipc;
             StatArray<W64, OPCLASS_COUNT> opclass;
+            //StatObj<W64> sse_uops;
+            //StatObj<W64> multiple_sse_uops;
+            //StatObj<W64> single_sse_uops;
+            //StatObj<W64> non_sse_uops;
+
+            
+            struct sse_uops : public Statable
+            {
+                StatObj<W64> multiple;
+                StatObj<W64> single;
+                StatObj<W64> total;
+
+                sse_uops(Statable *parent)
+                    : Statable("sse_uops", parent)
+                      , multiple("multiple", this)
+                      , single("single", this)
+                      , total("total", this)
+                {}
+            } sse_uops;
+
+            struct non_sse_uops : public Statable
+            {
+                StatObj<W64> multiple;
+                StatObj<W64> single;
+                StatObj<W64> total;
+
+                non_sse_uops(Statable *parent)
+                    : Statable("non_sse_uops", parent)
+                      , multiple("multiple", this)
+                      , single("single", this)
+                      , total("total", this)
+                {}
+            } non_sse_uops;
+
 
             issue(Statable *parent)
                 : Statable("issue", parent)
                   , result(this)
                   , uops("uops", this)
                   , uipc("uipc", this)
+                  , sse_uops(this)
+                  , non_sse_uops(this)
+                  //, sse_uops("sse_uops", this)
+                  //, multiple_sse_uops("multiple_sse_uops", this)
+                  //, single_sse_uops("single_sse_uops", this)
+                  //, non_sse_uops("non_sse_uops", this)
                   , opclass("opclass", this, opclass_names)
             {
                 // Periodic Dump Sample: Uncomment following line to dump the
@@ -220,6 +264,10 @@ namespace OOO_CORE_MODEL {
         {
             StatObj<W64> uops;
             StatObj<W64> insns;
+	    StatObj<W64> loads;
+	    StatObj<W64> stores;
+	    StatObj<W64> branch;
+	    StatObj<W64> fp;
             StatEquation<W64, double, StatObjFormulaDiv> uipc;
             StatEquation<W64, double, StatObjFormulaDiv> ipc;
 
@@ -299,14 +347,49 @@ namespace OOO_CORE_MODEL {
 
             StatArray<W64, OPCLASS_COUNT> opclass;
 
+            struct sse_uops : public Statable
+            {
+                StatObj<W64> multiple;
+                StatObj<W64> single;
+                StatObj<W64> total;
+
+                sse_uops(Statable *parent)
+                    : Statable("sse_uops", parent)
+                      , multiple("multiple", this)
+                      , single("single", this)
+                      , total("total", this)
+                {}
+            } sse_uops;
+
+            struct non_sse_uops : public Statable
+            {
+                StatObj<W64> multiple;
+                StatObj<W64> single;
+                StatObj<W64> total;
+
+                non_sse_uops(Statable *parent)
+                    : Statable("non_sse_uops", parent)
+                      , multiple("multiple", this)
+                      , single("single", this)
+                      , total("total", this)
+                {}
+            } non_sse_uops;
+
+
             commit(Statable *parent)
                 : Statable("commit", parent)
                   , uops("uops", this)
                   , insns("insns", this)
+                  , loads("loads", this)
+                  , stores("stores", this)
+                  , branch("branch", this)
+                  , fp("fp", this)
                   , uipc("uipc", this)
                   , ipc("ipc", this)
                   , result(this)
                   , fail(this)
+                  , sse_uops(this)
+                  , non_sse_uops(this)
                   , setflags(this)
                   , opclass("opclass", this, opclass_names)
             {
@@ -367,6 +450,10 @@ namespace OOO_CORE_MODEL {
                     StatObj<W64> exception;
                     StatObj<W64> ordering;
                     StatObj<W64> unaligned;
+                    //MOCH
+                    StatObj<W64> sse_load;
+                    StatObj<W64> total_pref;
+                    StatObj<W64> good_pref;
 
                     struct replay : public Statable
                     {
@@ -398,6 +485,10 @@ namespace OOO_CORE_MODEL {
 
                     issue(Statable *parent)
                         : Statable("issue", parent)
+                          //MOCH
+                          , sse_load("sse_load", this)
+                          , total_pref("total_pref", this)
+                          , good_pref("good_pref", this)
                           , complete("complete", this)
                           , miss("miss", this)
                           , hit("hit", this)
@@ -534,6 +625,8 @@ namespace OOO_CORE_MODEL {
 
 		StatObj<W64> rename_table_reads;
 		StatObj<W64> rename_table_writes;
+		StatObj<W64> rename_table_fp_reads;
+		StatObj<W64> rename_table_fp_writes;
 
 		StatObj<W64> reg_reads;
 		StatObj<W64> reg_writes;
@@ -563,6 +656,8 @@ namespace OOO_CORE_MODEL {
 			  , rob_writes("rob_writes", this)
 			  , rename_table_reads("rename_table_reads", this)
 			  , rename_table_writes("rename_table_writes", this)
+			  , rename_table_fp_reads("rename_table_fp_reads", this)
+			  , rename_table_fp_writes("rename_table_fp_writes", this)
 			  , reg_reads("reg_reads", this)
 			  , reg_writes("reg_writes", this)
 			  , fp_reg_reads("fp_reg_reads", this)
@@ -610,6 +705,7 @@ namespace OOO_CORE_MODEL {
                 StatArray<W64, MAX_PHYSREG_STATE> fp;
                 StatArray<W64, MAX_PHYSREG_STATE> st;
                 StatArray<W64, MAX_PHYSREG_STATE> br;
+		        
 
                 source(Statable *parent)
                     : Statable("source", parent)
@@ -627,6 +723,10 @@ namespace OOO_CORE_MODEL {
                 StatArray<W64, MAX_ISSUE_WIDTH+1> fp;
                 StatArray<W64, MAX_ISSUE_WIDTH+1> ld;
                 StatArray<W64, MAX_ISSUE_WIDTH+1> all;
+                StatArray<W64, MAX_ISSUE_WIDTH+1> sse_width;
+                StatArray<W64, MAX_ISSUE_WIDTH+1> non_sse_width;
+                
+                //StatObj<W64> sse_uops;
 
                 width(Statable *parent)
                     : Statable("width", parent)
@@ -635,6 +735,8 @@ namespace OOO_CORE_MODEL {
                       , fp("fp", this)
                       , ld("ld", this)
                       , all("all", this)
+                      , sse_width("sse_width", this)
+                      , non_sse_width("non_sse_width", this)
                 {}
             } width;
 
@@ -687,12 +789,16 @@ namespace OOO_CORE_MODEL {
 
             StatObj<W64> free_reg_recycled;
             StatArray<W64, COMMIT_WIDTH+1> width;
+            StatArray<W64, COMMIT_WIDTH+1> sse_width;
+            StatArray<W64, COMMIT_WIDTH+1> non_sse_width;
 
             commit(Statable *parent)
                 : Statable("commit", parent)
                   , freereg(this)
                   , free_reg_recycled("free_reg_recycled", this)
                   , width("width", this)
+                  , sse_width("sse_width", this)
+                  , non_sse_width("non_sse_width", this)
             {}
         } commit;
 

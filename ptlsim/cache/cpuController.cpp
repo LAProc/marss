@@ -45,6 +45,7 @@ CPUController::CPUController(W8 coreid, const char *name,
 	Controller(coreid, name, memoryHierarchy)
     , stats(name, &memoryHierarchy->get_machine())
 {
+    printf("Adding core: %d\n", coreid);
     memoryHierarchy_->add_cpu_controller(this);
 
 	int_L1_i_ = NULL;
@@ -168,11 +169,29 @@ int CPUController::access_fast_path(Interconnect *interconnect,
 			fastPathLat = int_L1_i_->access_fast_path(this, request);
             N_STAT_UPDATE(stats.icache_latency, [fastPathLat]++, kernel_req);
 		} else {
-			fastPathLat = int_L1_d_->access_fast_path(this, request);
+		//SW PREFETCH
+        if (request->is_pref){
+	        /*CPUControllerQueueEntry* queueEntry = pendingRequests_.alloc();
+	        queueEntry->request = request;
+			    cache_access_cb(queueEntry);*/
+          return -1;
+        }
+	
+        else {fastPathLat = int_L1_d_->access_fast_path(this, request);
             N_STAT_UPDATE(stats.dcache_latency, [fastPathLat]++, kernel_req);
+            //MOCH	
+            if(fastPathLat>0){
+              N_STAT_UPDATE(stats.cpurequest.count.hit.L1d_afp.hit, ++, kernel_req);
+            }
+            else{ 
+              N_STAT_UPDATE(stats.cpurequest.count.hit.L1d_afp.forward, ++, kernel_req);
+            }
+        }
 		}
 	}
 
+    //if (request->get_coreid() == 1)
+     //   printf("fastPathLat = %d\n", fastPathLat);
     if unlikely (fastPathLat == 0)
 		return 0;
 
@@ -185,6 +204,8 @@ int CPUController::access_fast_path(Interconnect *interconnect,
 
 	if unlikely (queueEntry == NULL) {
 		marss_add_event(&queueAccess_, 1, request);
+    //MOCH
+   	 N_STAT_UPDATE(stats.cpurequest.count.hit.pend_fail.hit, ++, kernel_req);
 		return -1;
 	}
 
@@ -200,7 +221,9 @@ int CPUController::access_fast_path(Interconnect *interconnect,
 	queueEntry->request = request;
 
 	if(dependentEntry &&
-			dependentEntry->request->get_type() == request->get_type()) {
+			(dependentEntry->request->get_type() == request->get_type()) 
+      && (request->get_type() != MEMORY_OP_READ)  //added by mochamad
+        ) {
         /*
          * Found an entry with same line request and request type,
          * Now in dependentEntry->depends add current entry's
@@ -208,6 +231,8 @@ int CPUController::access_fast_path(Interconnect *interconnect,
          * dependent entry is handled.
          */
 		memdebug("Dependent entry is: ", *dependentEntry, endl);
+        //if (request->get_coreid() == 1)
+        //    printf("Dependent entry.\n");
 		dependentEntry->depends = queueEntry->idx;
         queueEntry->waitFor = dependentEntry->idx;
 		queueEntry->cycles = -1;
@@ -216,12 +241,18 @@ int CPUController::access_fast_path(Interconnect *interconnect,
 		}
 		else  {
 			if(queueEntry->request->get_type() == MEMORY_OP_READ) {
-				N_STAT_UPDATE(stats.cpurequest.stall.read.dependency, ++, kernel_req);
-            } else {
+				N_STAT_UPDATE(stats.cpurequest.stall.read.dependency, ++, kernel_req);    
+        if(fastPathLat<=0) { queueEntry->depend_miss=true;}
+      
+      } else {
 				N_STAT_UPDATE(stats.cpurequest.stall.write.dependency, ++, kernel_req);
             }
 		}
-	} else {
+	} 
+  
+  else {
+        //if (request->get_coreid() == 1)
+        //    printf("No Dependent entry.\n");
 		if(fastPathLat > 0) {
 			queueEntry->cycles = fastPathLat;
 		} else {
@@ -231,6 +262,13 @@ int CPUController::access_fast_path(Interconnect *interconnect,
 	memdebug("Added Queue Entry: ", *queueEntry, endl);
 	return -1;
 }
+
+void CPUController::hit_patch_count(Interconnect *interconnect, MemoryRequest *request){
+  
+  int_L1_d_->hit_patch_count(this, request);
+
+}
+
 
 bool CPUController::is_cache_availabe(bool is_icache)
 {
@@ -242,6 +280,9 @@ CPUControllerQueueEntry* CPUController::find_dependency(
 		MemoryRequest *request)
 {
 	W64 requestLineAddr = get_line_address(request);
+
+    if (request->get_type() == MEMORY_OP_TSX)
+        return NULL;
 
 	CPUControllerQueueEntry* queueEntry;
 	foreach_list_mutable(pendingRequests_.list(), queueEntry, entry_t,
@@ -346,17 +387,32 @@ bool CPUController::cache_access_cb(void *arg)
 	else
 		interconnect = int_L1_d_;
 
+    //if (queueEntry->request->get_coreid() == 1)
+    //    printf("cache access cb: interconnect = %p\n", interconnect);
+
 	Message& message = *memoryHierarchy_->get_message();
 	message.sender = this;
 	message.request = queueEntry->request;
+
+    //if (queueEntry->request->get_coreid() == 1)
+    //    printf("singal_name = %s\n", interconnect->
+    //            get_controller_request_signal()->get_name());
+	
 	bool success = interconnect->get_controller_request_signal()->
 		emit(&message);
     /* Free the message */
 	memoryHierarchy_->free_message(&message);
 
 	if(!success) {
+        //if (queueEntry->request->get_coreid() == 1)
+        //    printf("inside a: %d\n", success);
 		marss_add_event(&cacheAccess_, 1, queueEntry);
-	}
+	} else if (queueEntry->request->get_type() == MEMORY_OP_TSX) {
+        //if (queueEntry->request->get_coreid() == 1)
+        //    printf("inside b: %d\n", success);
+        queueEntry->request->decRefCounter();
+		pendingRequests_.free(queueEntry);
+    }
 
 	return true;
 }
@@ -427,6 +483,36 @@ void CPUController::clock()
 			memdebug("Finalizing from clock\n");
 			finalize_request(queueEntry);
 			wakeup_dependents(queueEntry);
+
+      bool kernel_req = queueEntry->request->is_kernel();
+
+      //////////////////////////PATCH Handling///////////////////////////
+      if(queueEntry->depend_miss){
+        
+        //hit_patch_count(this, queueEntry->request);
+        int_L1_d_->hit_patch_count(this, queueEntry->request);
+
+#if 0        
+        static int sse_ctr =0;
+
+        if(queueEntry->request->ld_sse){
+          ++sse_ctr;
+          if((sse_ctr%2)==0){
+            N_STAT_UPDATE(stats.cpurequest.count.hit.fp0.hit, ++, kernel_req);
+          }
+          else {
+          //do nothing
+          }
+        
+        }
+
+       else{
+        N_STAT_UPDATE(stats.cpurequest.count.hit.fp0.hit, ++, kernel_req);
+       }
+#endif
+
+      }
+      //////////////////////////////////////////////////////////////////
 		}
 	}
 }
@@ -485,6 +571,14 @@ has no relevence to any hardware module.\n");
 	YAML_KEY_VAL(out, "icache_buffer_size", icacheBuffer_.size());
 
 	out << YAML::EndMap;
+}
+
+void CPUController::dump_mcpat_configuration(root_system *mcpat, W32 core)
+{
+}
+
+void CPUController::dump_mcpat_stats(root_system *mcpat, W32 core)
+{
 }
 
 /* CPU Controller Builder */

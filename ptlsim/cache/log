@@ -1,0 +1,19 @@
+141a142,143
+>             //void hit_patch_count(MemoryRequest *request);
+>             void hit_patch_count(Controller * controller, MemoryRequest *request);
+146,149c148
+< 	    void reset_lastcycle_stats() {}
+< 	    void dump_configuration(YAML::Emitter &out) const;
+< 	    void dump_mcpat_configuration(root_system *mcpatData, W32 idx) {}
+< 	    void dump_mcpat_stats(root_system *mcpatData, W32 idx) {}
+---
+> 			void dump_configuration(YAML::Emitter &out) const;
+175,182d173
+<             }
+< 
+<             bool is_empty() const {
+<                 foreach (i, controllers.count()) {
+<                     if (controllers[i]->queue.count() > 0)
+<                         return false;
+<                 }
+<                 return true;

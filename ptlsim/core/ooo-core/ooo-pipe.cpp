@@ -15,6 +15,7 @@
 #include <ptlsim.h>
 #include <branchpred.h>
 #include <logic.h>
+#include <stdio.h>
 
 #include <ooo.h>
 
@@ -744,6 +745,8 @@ bool ThreadContext::fetch() {
         }
 
         fetchcount++;
+
+
     }
 
     if (fetchcount == FETCH_WIDTH) thread_stats.fetch.stop.full_width++;
@@ -902,7 +905,6 @@ void ThreadContext::rename() {
                     (rob.operands[i]->state == PHYSREG_WRITTEN)) {
                 rob.operands[i]->rob->consumer_count = min(rob.operands[i]->rob->consumer_count + 1, 255);
             }
-
 			if (i != RS)
 				thread_stats.physreg_reads[rob.operands[i]->rfid]++;
         }
@@ -1003,14 +1005,23 @@ void ThreadContext::rename() {
         if unlikely (br) specrrt.renamed_in_this_basic_block.reset();
 #endif
 
+	
         thread_stats.frontend.renamed.none+=((!renamed_reg) && (!renamed_flags));
         thread_stats.frontend.renamed.reg += ((renamed_reg) && (!renamed_flags));
         thread_stats.frontend.renamed.flags += ((!renamed_reg) && (renamed_flags));
         thread_stats.frontend.renamed.flags += ((!renamed_reg) && (renamed_flags));
+	if (phys_reg_file == core.PHYS_REG_FILE_INT)
 		thread_stats.rename_table_writes += ((renamed_reg) || (renamed_flags));
+	else if (phys_reg_file == core.PHYS_REG_FILE_FP)
+		thread_stats.rename_table_fp_writes += ((renamed_reg) || (renamed_flags));
+	
         rob.changestate(rob_frontend_list);
 
         prepcount++;
+
+
+        //prepcount++;
+
     }
 
     thread_stats.frontend.width[prepcount]++;
@@ -1387,6 +1398,7 @@ int ThreadContext::dispatch() {
 			CORE_STATS(iq_writes)++;
 
 		CORE_STATS(dispatch.opclass)[opclassof(rob->uop.opcode)]++;
+
     }
 
     CORE_STATS(dispatch.width)[core.dispatchcount]++;
@@ -1513,11 +1525,12 @@ int ThreadContext::writeback(int cluster) {
 
         core.writecount++;
 
+
          /*
           * For simulation purposes, final value is already in rob->physreg,
           * so we don't need to actually write anything back here.
           */
-
+        //core.writecount++; 
         thread_stats.writeback.writebacks[rob->physreg->rfid]++;
         rob->physreg->writeback();
         rob->cycles_left = -1;
@@ -1613,16 +1626,28 @@ int ThreadContext::commit() {
         if unlikely (core.commitcount >= COMMIT_WIDTH) break;
         rc = rob.commit();
         if likely (rc == COMMIT_RESULT_OK) {
+
             core.commitcount++;
+
+            
+            //core.commitcount++;
             last_commit_at_cycle = sim_cycle;
-			thread_stats.rob_reads++;
+            thread_stats.rob_reads++;
+            
+
         } else {
             break;
         }
     }
 
     CORE_STATS(commit.width)[core.commitcount]++;
+            
+    CORE_STATS(commit.sse_width)[core.sse_commitcount]++;
+    CORE_STATS(commit.non_sse_width)[core.non_sse_commitcount]++;
 
+    //core.commitcount=0;
+    core.sse_commitcount=0;
+    core.non_sse_commitcount=0;
 
     return rc;
 }
@@ -1870,11 +1895,16 @@ int ReorderBufferEntry::commit() {
     PhysicalRegister* oldphysreg = thread.commitrrt[uop.rd];
 
 	thread.thread_stats.rob_reads++;
-	thread.thread_stats.rename_table_reads++;
 
     bool ld = isload(uop.opcode);
     bool st = isstore(uop.opcode);
     bool br = isbranch(uop.opcode);
+    bool fp = isclass(uop.opcode, OPCLASS_FP);
+
+    if (fp)
+	thread.thread_stats.rename_table_fp_reads++;
+    else if (!ld && !st && !br)
+	thread.thread_stats.rename_table_reads++;
 
     /* check if we can access dcache for store */
     if(st && !core.memoryHierarchy->is_cache_available(core.get_coreid(), threadid, false/* icache */)){
@@ -2077,12 +2107,14 @@ int ReorderBufferEntry::commit() {
             ctx.set_reg(uop.rd, physreg->data);
         }
 
-		if unlikely (opclassof(uop.opcode) == OPCLASS_FP)
-			thread.thread_stats.fp_reg_writes++;
-		else
-			thread.thread_stats.reg_writes++;
+//		if (uop.eom) {
+			if unlikely (opclassof(uop.opcode) == OPCLASS_FP)
+				thread.thread_stats.fp_reg_writes++;
+			else
+				thread.thread_stats.reg_writes++;
 
 		thread.thread_stats.physreg_reads[physreg->rfid]++;
+//		}
 
         physreg->rob = NULL;
     }
@@ -2182,6 +2214,7 @@ int ReorderBufferEntry::commit() {
                     Memory::MEMORY_OP_WRITE);
             request->set_coreSignal(&core.dcache_signal);
 
+    		//cout << "thread commit in " << sim_cycle << endl;
             assert(core.memoryHierarchy->access_cache(request));
             assert(lsq->virtaddr > 0xfff);
             if(config.checker_enabled && !ctx.kernel_mode) {
@@ -2270,6 +2303,10 @@ int ReorderBufferEntry::commit() {
         total_insns_committed++;
         thread.thread_stats.commit.insns++;
         thread.total_insns_committed++;
+	if (thread.thread_stats.get_default_stats() == user_stats) {
+		total_user_insns_committed++;
+	}
+	
 
 #ifdef TRACE_RIP
             ptl_rip_trace << "commit_rip: ",
@@ -2279,6 +2316,19 @@ int ReorderBufferEntry::commit() {
 #endif
         // if(uop.rip.rip > 0x7f0000000000)
         // per_core_event_update(core.coreid, insns_in_mode.userlib++);
+    bool uop_is_load = isclass(uop.opcode, OPCLASS_LOAD);
+    bool uop_is_store = isclass(uop.opcode, OPCLASS_STORE);
+    bool uop_is_fp = isclass(uop.opcode, OPCLASS_FP);
+    bool uop_is_branch = isclass(uop.opcode, OPCLASS_BRANCH);
+
+	if (uop_is_load)
+		thread.thread_stats.commit.loads++;
+	else if (uop_is_store)
+		thread.thread_stats.commit.stores++;
+	else if (uop_is_branch)
+		thread.thread_stats.commit.branch++;
+	else if (uop_is_fp)
+		thread.thread_stats.commit.fp++;
     }
 
     if (logable(10)) {
@@ -2294,6 +2344,7 @@ int ReorderBufferEntry::commit() {
     changestate(thread.rob_free_list);
     reset();
     thread.ROB.commit(*this);
+
 
     if unlikely (uop_is_barrier) {
         thread.thread_stats.commit.result.barrier_t++;
