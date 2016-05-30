@@ -12,6 +12,13 @@
 #define OOOCORE_CONST_H
 
 
+#define LATENCY
+
+#if defined _LATENCY || defined _PREF_ON || defined UOP
+#define CALIB_VERSION
+#endif
+
+
 #ifndef OOO_ISSUE_WIDTH
 #define OOO_ISSUE_WIDTH 4
 #endif

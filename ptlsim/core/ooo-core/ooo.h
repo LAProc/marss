@@ -241,6 +241,22 @@ namespace OOO_CORE_MODEL {
           * 01 = single precision, packed (two 32-bit floats)
           * 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
           */
+
+#ifdef LATENCY      
+        {OP_fadd,           3, ALLFU},
+        {OP_fsub,           3, ALLFU},
+        {OP_fmul,           5, ALLFU},
+        {OP_fmadd,          3, ALLFU},
+        {OP_fmsub,          3, ALLFU},
+        {OP_fmsubr,         3, ALLFU},
+        {OP_fdiv,           16, ALLFU},
+        {OP_fsqrt,          20, ALLFU},
+        {OP_frcp,           4, ALLFU},
+        {OP_frsqrt,         20, ALLFU},
+        {OP_fmin,           4, ALLFU},
+        {OP_fmax,           4, ALLFU},
+        {OP_fcmp,           4, ALLFU},
+#else 
         {OP_fadd,           6, ALLFU},
         {OP_fsub,           6, ALLFU},
         {OP_fmul,           6, ALLFU},
@@ -254,6 +270,7 @@ namespace OOO_CORE_MODEL {
         {OP_fmin,           6, ALLFU},
         {OP_fmax,           6, ALLFU},
         {OP_fcmp,           6, ALLFU},
+#endif
 
         /*
           * For fcmpcc, uop.size bits have following meaning:
