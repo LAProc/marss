@@ -2689,11 +2689,55 @@ int OooCore::issue(int cluster) {
             default:
                 break;
         }
+
         if(rc != ISSUE_SKIPPED) {
             //MOCH
+            //issuecount++;
+
+#ifdef UOP
+            //MOCH
+            //SSE UOPS
+            if(rob.uop.is_sse){
+                thread->thread_stats.issue.sse_uops.total++;
+                //issuecount++;
+                if(rob.uop.som && !rob.uop.eom){
+                //if(!rob.uop.som && rob.uop.eom){
+                    thread->thread_stats.issue.sse_uops.multiple += 2;
+                    sse_issuecount++;
+                    issuecount++;
+                }
+
+                else if (rob.uop.som && rob.uop.eom){
+                    sse_issuecount++;
+                    issuecount++;
+                }
+
+#if 0
+                else if(!rob.uop.som && rob.uop.eom){
+                    issuecount++;
+                }
+
+                else if(!rob.uop.som && !rob.uop.eom){
+                    issuecount++;
+                }
+#endif
+
+
+
+            }
+            
+            else{
+                issuecount++;
+                thread->thread_stats.issue.non_sse_uops.total++; 
+            }
+
+#else 
+            
             issuecount++;
+#endif
                 
 	    }
+
 
         if(issuecount>=maxwidth)
             break;

@@ -744,8 +744,32 @@ bool ThreadContext::fetch() {
             }
         }
 
-        fetchcount++;
+#ifdef UOP
+        if(transop.is_sse){
+            if(transop.som && !transop.eom){
+                fetchcount++;
+            }
+            //else if(uop.eom 
+                //thread.thread_stats.issue.single_sse_uops++ ;
+            else if(transop.som && transop.eom){
+                fetchcount++;
+            }
+            
 
+        }
+        else{            
+            if(transop.som && !transop.eom){
+                fetchcount++;
+            }
+
+            if(transop.som && transop.eom){
+                fetchcount++;
+            }
+        }
+#else
+        fetchcount++;
+#endif
+ 
 
     }
 
@@ -1017,9 +1041,33 @@ void ThreadContext::rename() {
 	
         rob.changestate(rob_frontend_list);
 
+#ifdef UOP
+        if(rob.uop.is_sse){
+            if(rob.uop.som && !rob.uop.eom){
+                prepcount++;
+            }
+            //else if(uop.eom 
+                //thread.thread_stats.issue.single_sse_uops++ ;
+            else if(rob.uop.som && rob.uop.eom){
+                prepcount++;
+            }
+            
+
+        }
+        else{            
+            if(rob.uop.som && !rob.uop.eom){
+                prepcount++;
+            }
+
+            else if(rob.uop.som && rob.uop.eom){
+                prepcount++;
+            }
+        }
+#else 
         prepcount++;
 
-
+#endif
+        
         //prepcount++;
 
     }
@@ -1390,7 +1438,33 @@ int ThreadContext::dispatch() {
             rob->changestate(rob->get_ready_to_issue_list());
         }
 
+#ifdef UOP
+        if(rob->uop.is_sse){
+            if(rob->uop.som && !rob->uop.eom){
+                core.dispatchcount++;
+            }
+            //else if(uop.eom 
+                //thread.thread_stats.issue.single_sse_uops++ ;
+            else if(rob->uop.som && rob->uop.eom){
+                core.dispatchcount++;
+            }
+            
+            //core.sse_commitcount++;
+
+        }
+        else{            
+            if(rob->uop.som && !rob->uop.eom){
+                core.dispatchcount++;
+            }
+
+            else if(rob->uop.som && rob->uop.eom){
+                core.dispatchcount++;
+            }
+        }
+#else 
+
         core.dispatchcount++;
+#endif
 
 		if unlikely (opclassof(rob->uop.opcode) == OPCLASS_FP)
 			CORE_STATS(iq_fp_writes)++;
@@ -1523,9 +1597,34 @@ int ThreadContext::writeback(int cluster) {
 
         wakeupcount += rob->forward();
 
+#ifdef UOP
+        if(rob->uop.is_sse){
+            if(rob->uop.som && !rob->uop.eom){
+                core.writecount++; 
+            }
+            //else if(uop.eom 
+                //thread.thread_stats.issue.single_sse_uops++ ;
+            else if(rob->uop.som && rob->uop.eom){
+                core.writecount++; 
+            }
+            
+            //core.sse_commitcount++;
+
+        }
+        else{            
+            if(rob->uop.som && !rob->uop.eom){
+                core.writecount++; 
+            }
+
+            else if(rob->uop.som && rob->uop.eom){
+                core.writecount++; 
+            }
+        }
+#else 
         core.writecount++;
-
-
+#endif
+    
+     
          /*
           * For simulation purposes, final value is already in rob->physreg,
           * so we don't need to actually write anything back here.
@@ -1627,10 +1726,53 @@ int ThreadContext::commit() {
         rc = rob.commit();
         if likely (rc == COMMIT_RESULT_OK) {
 
+#ifdef UOP            
+            //MOCH
+            //SSE UOPS
+            if(rob.uop.is_sse){
+                thread_stats.commit.sse_uops.total++;
+                if(rob.uop.som && !rob.uop.eom){
+                    thread_stats.commit.sse_uops.multiple += 2;
+                    core.commitcount++;
+                    core.sse_commitcount++;
+                    last_commit_at_cycle = sim_cycle;
+                    thread_stats.rob_reads++;
+                }
+                //else if(uop.eom 
+                    //thread.thread_stats.issue.single_sse_uops++ ;
+                else if(rob.uop.som && rob.uop.eom){
+                    core.commitcount++;
+                    core.sse_commitcount++;
+                    last_commit_at_cycle = sim_cycle;
+                    thread_stats.rob_reads++;
+                }
+                
+                //core.sse_commitcount++;
+
+            }
+            else{            
+                thread_stats.commit.non_sse_uops.total++; 
+                if(rob.uop.som && !rob.uop.eom){
+                    thread_stats.commit.non_sse_uops.multiple += 2;
+                    core.commitcount++;
+                    core.non_sse_commitcount++;
+                    last_commit_at_cycle = sim_cycle;
+                    thread_stats.rob_reads++;
+                }
+
+                else if(rob.uop.som && rob.uop.eom){
+                    core.commitcount++;
+                    core.non_sse_commitcount++;
+                    last_commit_at_cycle = sim_cycle;
+                    thread_stats.rob_reads++;
+                }
+            }
+#else 
+
             core.commitcount++;
 
-            
-            //core.commitcount++;
+#endif
+
             last_commit_at_cycle = sim_cycle;
             thread_stats.rob_reads++;
             
