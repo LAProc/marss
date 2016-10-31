@@ -5398,7 +5398,7 @@ bool Accelerator::runcycle(void *nothing)
                     //exit(0);
                     PER_ITER_BEGIN_CYCLES = sim_cycle;
                 }
-                temp_state = Accel_Cal;
+                //temp_state = Accel_Cal;
               }
             break;
 

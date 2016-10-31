@@ -83,4 +83,17 @@ It will print all the simulation options on STDOUT.
 For more information on using and modifying Marss please visit our website :
     http://www.marss86.org/
 
+
+*Additional info on calling accelerator from the user program : 
+------------------
+test_sample.cc gives an idea how an accelerator is called from the user program.
+We use Linear Algebra Processor (LAP) as an accelerator.
+
+In lines 118-139, the CPU offloads necessary data to LAP's space, 
+trigger the matrix multiplication acceleration, then copy the results back to
+the user program. 
+
+If LAP accelerator is not needed, then the lines should be commented and 
+the user should instead replace them with the call to matrix multiply function/library. 
+
 Happy Hacking.

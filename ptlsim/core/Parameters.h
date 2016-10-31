@@ -16,7 +16,7 @@
 #include <deque>
 
 #define COL_MAJOR
-#define SUBSTRACT
+//#define SUBSTRACT
 
 extern int LAST_STORE;
 extern int ITER_COUNT;
