@@ -12,10 +12,12 @@ You can find out more details about Marss go to (http://www.marss86.org/).
 
 This version of Marss-x86 has been calibrated to closely match an Intel
 i7-920 micro-architecture targetting high-performance computing (HPC)
-applications. Furthermore, an accelerator has been integrated into the
-system as a case study of heterogenous system architecture design. These
-extensions were developed by Mochamad Asri at The University of Texas at
-Austin. For details, please refer to:
+applications. Furthermore, The Linear Algebra Core (LAC) accelerator
+[https://github.com/LAProc/LAP_SIM]
+has been integrated into the system as a case study of heterogenous 
+system architecture design. These extensions were developed by 
+Mochamad Asri at The University of Texas at Austin. 
+For details, please refer to:
 
    Mochamad Asri, Ardavan Pedram, Lizy K. John, Andreas Gerstlauer,
    "Simulator Calibration for Accelerator-Rich Architecture Studies,"
@@ -86,6 +88,8 @@ For more information on using and modifying Marss please visit our website :
 
 *Additional info on calling accelerator from the user program : 
 ------------------
+The LAC source code for Accelerator is in the /ptlsim/core/ directory
+
 test_sample.cc gives an idea how an accelerator is called from the user program.
 We use Linear Algebra Processor (LAP) as an accelerator.
 
