@@ -25,6 +25,9 @@ For details, please refer to:
    International Conference on Embedded Computer Systems: Architectures,
    Modeling and Simulation (SAMOS XVI), Samos, Greece, July 2016.
 
+Future plans are aiming to add more functionality to LAC and develop  
+integration of the accelerator in various levels of memory hierarchy.
+
 
 System Requirements
 -------------------
