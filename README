@@ -16,7 +16,7 @@ applications. Furthermore, The Linear Algebra Core (LAC) accelerator
 [https://github.com/LAProc/LAP_SIM]
 Copyright 2014 Ardavan Pedram (perdavan@stanford.edu)
 has been integrated into the system as a case study of heterogenous 
-system architecture design. These extensions were developed by 
+system architecture integration. These extensions were developed by 
 Mochamad Asri at The University of Texas at Austin. 
 For details, please refer to:
 
