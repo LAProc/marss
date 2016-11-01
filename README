@@ -12,7 +12,7 @@ You can find out more details about Marss go to (http://www.marss86.org/).
 
 This version of Marss-x86 has been calibrated to closely match an Intel
 i7-920 micro-architecture targetting high-performance computing (HPC)
-applications. Furthermore, The Linear Algebra Core (LAC) accelerator
+applications. Furthermore, The Linear Algebra Core/Processor (LAC/LAP) accelerator
 [https://github.com/LAProc/LAP_SIM]
 Copyright 2014 Ardavan Pedram (perdavan@stanford.edu)
 has been integrated into the system as a case study of heterogenous 
@@ -94,14 +94,15 @@ For more information on using and modifying Marss please visit our website :
 ------------------
 The LAC source code for Accelerator is in the /ptlsim/core/ directory
 
-test_sample.cc gives an idea how an accelerator is called from the user program.
-We use Linear Algebra Processor (LAP) as an accelerator.
+test_sample.cc gives an idea how The LAC/LAP (accelerator) is called from the user program.
 
 In lines 118-139, the CPU offloads necessary data to LAP's space, 
-trigger the matrix multiplication acceleration, then copy the results back to
+triggers the matrix multiplication acceleration, then copies the results back to
 the user program. 
 
-If LAP accelerator is not needed, then the lines should be commented and 
-the user should instead replace them with the call to matrix multiply function/library. 
+If LAP is not needed, then the lines should be commented and 
+the user should instead replace them with the call to matrix multiply function/library implementation. 
+We will release the integrated library calls through libflame library in future versions.
+
 
 Happy Hacking.
